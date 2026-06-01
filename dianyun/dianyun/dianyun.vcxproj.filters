@@ -32,7 +32,13 @@
     <QtMoc Include="dianyun.h">
       <Filter>Header Files</Filter>
     </QtMoc>
+    <QtMoc Include="plydirectoryworker.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
     <ClCompile Include="dianyun.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="plydirectoryworker.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

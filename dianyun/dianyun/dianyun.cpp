@@ -1,7 +1,10 @@
 ﻿#include "dianyun.h"
 #include "ui_dianyun.h"
+#include "plydirectoryworker.h"
 
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 
 // Qt
@@ -184,9 +187,35 @@ dianyun::dianyun(QWidget* parent) : QMainWindow(parent), ui(new Ui::dianyunClass
     // 初始化日志和状态
     ui->groupBoxLog->setTitle(QString::fromUtf8("操作日志")); // 将Logs改为操作日志
     appendLog(QString::fromUtf8("系统已启动，操作日志就绪。"));
+
+    qRegisterMetaType<pcl::PointCloud<pcl::PointXYZRGB>::Ptr>("pcl::PointCloud<pcl::PointXYZRGB>::Ptr");
+
+    plyWorker = new PlyDirectoryWorker(
+        QString::fromUtf8("E:/document/images/MV-DP2240-01H(00DA0491289)"), this);
+
+    connect(plyWorker, &PlyDirectoryWorker::statusMessage,
+            this, &dianyun::appendLog);
+
+    connect(plyWorker, &PlyDirectoryWorker::cloudLoaded,
+            this, &dianyun::onCloudLoaded);
+
+    connect(plyWorker, &PlyDirectoryWorker::loadFailed,
+            this, [this](const QString& reason, const QString& filePath) {
+                appendLog(QString::fromUtf8("点云加载失败：") +
+                          QFileInfo(filePath).fileName() +
+                          QString::fromUtf8("，原因：") + reason);
+            });
+
+    plyWorker->start();
 }
 
-dianyun::~dianyun() { delete ui; }
+dianyun::~dianyun()
+{
+    if (plyWorker) {
+        plyWorker->stop();
+    }
+    delete ui;
+}
 
 // =========================================================================
 // 日志操作
@@ -198,6 +227,35 @@ void dianyun::appendLog(const QString& msg)
         QString timeStr = QTime::currentTime().toString("[HH:mm:ss] ");
         ui->textLog->append(timeStr + msg);
     }
+}
+
+void dianyun::onCloudLoaded(pcl::PointCloud<pcl::PointXYZRGB>::Ptr newCloud, const QString& filePath)
+{
+    if (!newCloud || newCloud->empty()) {
+        appendLog(QString::fromUtf8("点云数据为空，渲染取消。"));
+        return;
+    }
+
+    cloud = newCloud;
+
+    if (viewerCloud) {
+        viewerCloud->removeAllPointClouds();
+        viewerCloud->removeAllShapes();
+
+        pcl::visualization::PointCloudColorHandlerGenericField<pcl::PointXYZRGB> z_color(cloud, "z");
+        viewerCloud->addPointCloud<pcl::PointXYZRGB>(cloud, z_color, "point_cloud");
+
+        pcl::PointXYZRGB minPt, maxPt;
+        pcl::getMinMax3D(*cloud, minPt, maxPt);
+
+        double scale = (maxPt.getVector3fMap() - minPt.getVector3fMap()).norm() * 0.03;
+        if (scale < 0.1) scale = 0.1;
+        viewerCloud->addCoordinateSystem(scale);
+
+        viewerCloud->resetCamera();
+    }
+
+    appendLog(QString::fromUtf8("点云加载完成：") + QFileInfo(filePath).fileName());
 }
 
 // =========================================================================

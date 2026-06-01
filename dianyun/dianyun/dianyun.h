@@ -1,6 +1,8 @@
 ﻿#pragma once
 
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 
 #include <QtWidgets/QMainWindow>
@@ -21,6 +23,10 @@
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Face.hxx>
 #include <vector>
+
+Q_DECLARE_METATYPE(pcl::PointCloud<pcl::PointXYZRGB>::Ptr)
+
+class PlyDirectoryWorker;
 
 namespace Ui { class dianyunClass; }
 
@@ -50,6 +56,7 @@ private slots:
     void on_btnDeleteSeam_clicked();
     void on_listWeldSeams_itemClicked(QListWidgetItem* item);
     void updatePCLWindow();
+    void onCloudLoaded(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud, const QString& filePath);
 
 private:
     Ui::dianyunClass* ui;
@@ -59,6 +66,7 @@ private:
     pcl::visualization::PCLVisualizer::Ptr viewer3D;
     pcl::visualization::PCLVisualizer::Ptr viewerCloud;
     QTimer* timer;
+    PlyDirectoryWorker* plyWorker = nullptr;
 
     std::vector<WeldSeamData> seam_list;
     int seam_counter = 0;

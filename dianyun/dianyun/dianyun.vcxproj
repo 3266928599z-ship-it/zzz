@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -37,12 +37,12 @@
   </ImportGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="QtSettings">
     <QtInstall>6.10.1_msvc2022_64</QtInstall>
-    <QtModules>core;gui;widgets;openglwidgets</QtModules>
+    <QtModules>core;gui;widgets;openglwidgets;concurrent</QtModules>
     <QtBuildConfig>debug</QtBuildConfig>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="QtSettings">
     <QtInstall>6.10.1_msvc2022_64</QtInstall>
-    <QtModules>core;gui;widgets;openglwidgets</QtModules>
+    <QtModules>core;gui;widgets;openglwidgets;concurrent</QtModules>
     <QtBuildConfig>release</QtBuildConfig>
   </PropertyGroup>
   <Target Name="QtMsBuildNotFound" BeforeTargets="CustomBuild;ClCompile" Condition="!Exists('$(QtMsBuild)\qt.targets') or !Exists('$(QtMsBuild)\qt.props')">
@@ -74,7 +74,8 @@
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
       <PreprocessorDefinitions>PCL_NO_PRECOMPILE;BOOST_USE_WINDOWS_H;NOMINMAX;_CRT_SECURE_NO_WARNINGS;PCL_SILENCE_MALLOC_WARNING;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(VcpkgRoot)\installed\x64-windows\include\eigen3;$(VcpkgRoot)\installed\x64-windows\include\opencascade;$(VcpkgRoot)\installed\x64-windows\include\vtk-9.3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+<AdditionalIncludeDirectories>$(VcpkgRoot)\installed\x64-windows\include\eigen3;$(VcpkgRoot)\installed\x64-windows\include\opencascade;$(VcpkgRoot)\installed\x64-windows\include\vtk-9.3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>E:\PCL 1.15.1\lib;E:\PCL 1.15.1\3rdParty\Boost\lib;E:\PCL 1.15.1\3rdParty\FLANN\lib;E:\PCL 1.15.1\3rdParty\VTK\lib;E:\PCL 1.15.1\3rdParty\OpenNI2\Lib;%(AdditionalLibraryDirectories);Z:\vcpkg-master\installed\x64-windows\lib</AdditionalLibraryDirectories>
@@ -84,7 +85,8 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(VcpkgRoot)\installed\x64-windows\include\eigen3;$(VcpkgRoot)\installed\x64-windows\include\opencascade;$(VcpkgRoot)\installed\x64-windows\include\vtk-9.3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+<AdditionalIncludeDirectories>$(VcpkgRoot)\installed\x64-windows\include\eigen3;$(VcpkgRoot)\installed\x64-windows\include\opencascade;$(VcpkgRoot)\installed\x64-windows\include\vtk-9.3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_UNICODE;UNICODE;%(PreprocessorDefinitions);EIGEN_DONT_VECTORIZE;EIGEN_DISABLE_UNALIGNED_ARRAY_ASSERT;NOMINMAX;_CRT_SECURE_NO_WARNINGS</PreprocessorDefinitions>
     </ClCompile>
     <Link>
@@ -119,11 +121,13 @@
       <OptimizeReferences>true</OptimizeReferences>
     </Link>
   </ItemDefinitionGroup>
-  <ItemGroup>
+      <ItemGroup>
     <QtRcc Include="dianyun.qrc" />
     <QtUic Include="dianyun.ui" />
     <QtMoc Include="dianyun.h" />
+    <QtMoc Include="plydirectoryworker.h" />
     <ClCompile Include="dianyun.cpp" />
+    <ClCompile Include="plydirectoryworker.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
@@ -133,3 +137,8 @@
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>
+
+
+
+
+
