@@ -46,6 +46,12 @@
     <ClCompile Include="ModelMatchWorker.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ModelMatchController.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="PointCloudLoader.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="PointCloudLoadController.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="StepModelLoader.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="VisualizationManager.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="WeldSeamService.cpp"><Filter>Source Files</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="HikCameraWorker.h">
@@ -54,5 +60,16 @@
     <QtMoc Include="ModelMatchWorker.h">
       <Filter>Header Files</Filter>
     </QtMoc>
+    <QtMoc Include="ModelMatchController.h"><Filter>Header Files</Filter></QtMoc>
+    <QtMoc Include="PointCloudLoadController.h"><Filter>Header Files</Filter></QtMoc>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="AppTypes.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="MatchTypes.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="PointCloudLoader.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="StepModelLoader.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="VisualizationManager.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="WeldSeamService.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="WeldTypes.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
 </Project>

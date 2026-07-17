@@ -19,73 +19,7 @@
 #include <QString>
 #include <QMetaType>
 
-// ===================================================================
-// 匹配参数与结果数据结构
-// ===================================================================
-
-// ---- 可调参数 ----
-struct MatchConfig {
-    float leafSizeFactor = 0.01f;
-    float edgePercentile = 0.25f;
-    int   sacRuns = 8;
-    float sacInlierFrac = 0.15f;
-    float ambiguityRatio = 1.10f;
-    float seamSigmaFactor = 7.0f;
-    float seamWeightMax = 8.0f;
-    float confThreshFactor = 2.0f;
-    int   icpMaxIterA = 50;
-    int   icpMaxIterB = 50;
-};
-
-// ---- 焊缝路径点 ----
-struct WeldPathPoint {
-    Eigen::Vector3f position;
-    Eigen::Vector3f normal;
-    bool fromScan;   // false = 扫描点云缺失,该点为CAD推算
-};
-
-enum class SeamConfidence { High, Medium, Low };
-enum class MatchVerdict { Pass, NeedsReview, Fail };
-
-// ---- 逐焊缝结果 ----
-struct SeamMatchResult {
-    int seamId;
-    QString seamName;
-    float coverageRatio;
-    float meanResidual;
-    float maxResidual;
-    SeamConfidence confidence;
-    std::vector<WeldPathPoint> pathPoints;
-};
-
-// ---- 整体匹配结果 ----
-struct MatchResult {
-    // 【终极修复核心】：接管内存分配，保障 16 字节对齐，防止 Qt 跨线程注册崩溃
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-
-        bool success = false;
-    Eigen::Matrix4f T_final = Eigen::Matrix4f::Identity();
-    float fitnessStageA = 0.f;
-    float fitnessStageB = 0.f;
-    float overlapRatio = 0.f;
-    float reverseOverlapRatio = 0.f;
-    float normalConsistency = 0.f;
-    float featureOverlapRatio = 0.f;
-    float spatialCoverageRatio = 0.f;
-    float rmse = 0.f;
-    float p95Residual = 0.f;
-    QString coarseCandidateReport;
-    int   iterationsStageB = 0;
-    bool  convergedStageB = false;
-    float finalSeamWeight = 1.f;
-    bool  wasAmbiguous = false;
-    float ambiguityRatio = 0.f;
-    Eigen::Matrix4f T_candidate2 = Eigen::Matrix4f::Identity();
-    std::vector<SeamMatchResult> seamResults;
-    MatchVerdict verdict = MatchVerdict::Fail;
-    QString verdictMessage;
-    QString errorMessage;
-};
+#include "MatchTypes.h"
 
 
 // ===================================================================
@@ -191,8 +125,3 @@ private:
 
     QString m_coarseCandidateReport;
 };
-
-// ===================================================================
-// 极其重要：向 Qt 注册自定义类型，允许其在多线程信号槽中传递
-// ===================================================================
-Q_DECLARE_METATYPE(MatchResult);

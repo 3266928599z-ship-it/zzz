@@ -7,6 +7,8 @@
 - 导入 STEP/STP 三维模型并显示 CAD 网格。
 - 对 CAD 三角面进行均匀采样，生成配准使用的 CAD 点云。
 - 导入 PLY/PCD 扫描点云并显示。
+- PLY/PCD 在后台线程读取和清理，主界面保持响应。
+- 扫描点云按每批十万点渐进渲染，最终显示全部有效点，不做显示降采样。
 - 连接海康工业相机，接收并显示采集点云。
 - 自动从包含底板、夹具和定位环的扫描场景中提取工件主体。
 - 自动完成粗配准、精配准、质量评价和结果判定。
@@ -43,9 +45,18 @@
 
 ## 主要代码
 
-- `dianyun.cpp/.h`：主窗口、文件导入、显示、焊缝交互和工作线程调度。
+- `dianyun.cpp/.h`：主窗口事件协调、状态和日志更新。
+- `AppTypes.h`：CAD模型与通用点云数据结构。
+- `StepModelLoader.cpp/.h`：STEP读取、三角化和CAD表面采样。
+- `PointCloudLoader.cpp/.h`：PLY/PCD读取与无效点清理。
+- `PointCloudLoadController.cpp/.h`：后台点云加载任务、进度和异常处理。
+- `WeldSeamService.cpp/.h`：CAD面求交和焊缝离散采样。
+- `WeldTypes.h`：焊缝数据与显示线段结构。
+- `ModelMatchController.cpp/.h`：匹配线程生命周期和只读点云输入传递。
 - `ModelMatchWorker.cpp/.h`：完整模型匹配流水线。
+- `MatchTypes.h`：匹配参数、结果和质量判定类型。
 - `HikCameraWorker.cpp/.h`：海康相机连接、采集和点云输出。
+- `VisualizationManager.cpp/.h`：主窗口内两个三维显示区域的渲染操作。
 - `dianyun.ui`：Qt 主界面布局。
 
 ## 构建环境

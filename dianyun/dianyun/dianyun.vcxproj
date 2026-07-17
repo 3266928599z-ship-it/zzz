@@ -127,7 +127,13 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="ModelMatchController.cpp" />
     <ClCompile Include="ModelMatchWorker.cpp" />
+    <ClCompile Include="PointCloudLoadController.cpp" />
+    <ClCompile Include="PointCloudLoader.cpp" />
+    <ClCompile Include="StepModelLoader.cpp" />
+    <ClCompile Include="VisualizationManager.cpp" />
+    <ClCompile Include="WeldSeamService.cpp" />
     <QtRcc Include="dianyun.qrc" />
     <QtUic Include="dianyun.ui" />
     <QtMoc Include="dianyun.h" />
@@ -140,6 +146,17 @@
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="ModelMatchWorker.h" />
+    <QtMoc Include="ModelMatchController.h" />
+    <QtMoc Include="PointCloudLoadController.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="AppTypes.h" />
+    <ClInclude Include="MatchTypes.h" />
+    <ClInclude Include="PointCloudLoader.h" />
+    <ClInclude Include="StepModelLoader.h" />
+    <ClInclude Include="VisualizationManager.h" />
+    <ClInclude Include="WeldSeamService.h" />
+    <ClInclude Include="WeldTypes.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">
