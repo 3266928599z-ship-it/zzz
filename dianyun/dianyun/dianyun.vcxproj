@@ -64,10 +64,12 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <VcpkgTriplet>x64-windows</VcpkgTriplet><VcpkgRoot>E:\vcpkg-master\</VcpkgRoot>
+    <VcpkgTriplet>x64-windows</VcpkgTriplet>
+    <VcpkgRoot>E:\vcpkg-master\</VcpkgRoot>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <VcpkgTriplet>x64-windows</VcpkgTriplet><VcpkgRoot>E:\vcpkg-master\</VcpkgRoot>
+    <VcpkgTriplet>x64-windows</VcpkgTriplet>
+    <VcpkgRoot>E:\vcpkg-master\</VcpkgRoot>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -75,22 +77,25 @@
       <PreprocessorDefinitions>PCL_NO_PRECOMPILE;BOOST_USE_WINDOWS_H;NOMINMAX;_CRT_SECURE_NO_WARNINGS;PCL_SILENCE_MALLOC_WARNING;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-<AdditionalIncludeDirectories>$(VcpkgRoot)\installed\x64-windows\include\eigen3;$(VcpkgRoot)\installed\x64-windows\include\opencascade;$(VcpkgRoot)\installed\x64-windows\include\vtk-9.3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VcpkgRoot)\installed\x64-windows\include\eigen3;$(VcpkgRoot)\installed\x64-windows\include\opencascade;$(VcpkgRoot)\installed\x64-windows\include\vtk-9.3;"E:\MVS\Development\Includes";%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OpenMPSupport>true</OpenMPSupport>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>E:\PCL 1.15.1\lib;E:\PCL 1.15.1\3rdParty\Boost\lib;E:\PCL 1.15.1\3rdParty\FLANN\lib;E:\PCL 1.15.1\3rdParty\VTK\lib;E:\PCL 1.15.1\3rdParty\OpenNI2\Lib;%(AdditionalLibraryDirectories);Z:\vcpkg-master\installed\x64-windows\lib</AdditionalLibraryDirectories>
-      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>E:\PCL 1.15.1\lib;E:\PCL 1.15.1\3rdParty\Boost\lib;E:\PCL 1.15.1\3rdParty\FLANN\lib;E:\PCL 1.15.1\3rdParty\VTK\lib;E:\PCL 1.15.1\3rdParty\OpenNI2\Lib;%(AdditionalLibraryDirectories);Z:\vcpkg-master\installed\x64-windows\lib;"E:\MVS\Development\Libraries\win64"</AdditionalLibraryDirectories>
+      <AdditionalDependencies>%(AdditionalDependencies);MvCameraControl.lib</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-<AdditionalIncludeDirectories>$(VcpkgRoot)\installed\x64-windows\include\eigen3;$(VcpkgRoot)\installed\x64-windows\include\opencascade;$(VcpkgRoot)\installed\x64-windows\include\vtk-9.3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VcpkgRoot)\installed\x64-windows\include\eigen3;$(VcpkgRoot)\installed\x64-windows\include\opencascade;$(VcpkgRoot)\installed\x64-windows\include\vtk-9.3;"E:\MVS\Development\Includes";%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_UNICODE;UNICODE;%(PreprocessorDefinitions);EIGEN_DONT_VECTORIZE;EIGEN_DISABLE_UNALIGNED_ARRAY_ASSERT;NOMINMAX;_CRT_SECURE_NO_WARNINGS</PreprocessorDefinitions>
+      <OpenMPSupport>true</OpenMPSupport>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>;Z:\vcpkg-master\installed\x64-windows\lib</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>;Z:\vcpkg-master\installed\x64-windows\lib;"E:\MVS\Development\Libraries\win64"</AdditionalLibraryDirectories>
+      <AdditionalDependencies>$(CoreLibraryDependencies);%(AdditionalDependencies);MvCameraControl.lib</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
@@ -121,14 +126,20 @@
       <OptimizeReferences>true</OptimizeReferences>
     </Link>
   </ItemDefinitionGroup>
-      <ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="ModelMatchWorker.cpp" />
     <QtRcc Include="dianyun.qrc" />
     <QtUic Include="dianyun.ui" />
     <QtMoc Include="dianyun.h" />
-    <QtMoc Include="plydirectoryworker.h" />
     <ClCompile Include="dianyun.cpp" />
-    <ClCompile Include="plydirectoryworker.cpp" />
+    <ClCompile Include="HikCameraWorker.cpp" />
     <ClCompile Include="main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="HikCameraWorker.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="ModelMatchWorker.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">
@@ -137,8 +148,3 @@
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>
-
-
-
-
-

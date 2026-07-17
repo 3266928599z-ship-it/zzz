@@ -41,9 +41,9 @@
          </widget>
         </item>
         <item>
-         <widget class="QPushButton" name="btnOpen_4">
+         <widget class="QPushButton" name="btnOpenCamera">
           <property name="text">
-           <string>焊缝映照</string>
+           <string>开始拍摄</string>
           </property>
          </widget>
         </item>

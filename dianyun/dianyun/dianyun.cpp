@@ -1,6 +1,5 @@
 ﻿#include "dianyun.h"
 #include "ui_dianyun.h"
-#include "plydirectoryworker.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -27,6 +26,7 @@
 #include <pcl/io/vtk_lib_io.h> 
 #include <pcl/conversions.h>
 #include <pcl/common/common.h>
+#include <pcl/common/transforms.h> // 新增：用于匹配成功后点云的位姿变换渲染
 #include <pcl/PCLPointCloud2.h>
 
 // VTK
@@ -52,7 +52,8 @@
 #include <gp_Pnt.hxx>
 #include <BRepBndLib.hxx>
 #include <Bnd_Box.hxx>
-
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <TopExp.hxx>
 
 // OCCT Algo
 #include <BRepAlgoAPI_Section.hxx>
@@ -65,6 +66,16 @@
 // Math
 #include <Eigen/Dense>
 #include <random>
+#include <algorithm>
+
+// ModelMatch & MetaTypes
+#include <QMetaType>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <Eigen/Core>
+
+#include <QDateTime>  // 用于在 Logs 里生成 [HH:mm:ss] 时间戳
+#include <QDebug>     // 用于 qDebug() 打印调试信息
 
 // =========================================================================
 // 核心逻辑 1：STEP 转 Mesh (只提取顶点，不填充)
@@ -82,6 +93,7 @@ bool dianyun::LoadStepFileToPCL(const std::string& filename)
     m_model_faces.clear();
     m_cell_to_face_map.clear();
     cloud->clear();
+    m_cadCloud->clear();
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr mesh_vertices(new pcl::PointCloud<pcl::PointXYZ>);
     std::vector<pcl::Vertices> mesh_polygons;
@@ -98,6 +110,7 @@ bool dianyun::LoadStepFileToPCL(const std::string& filename)
     // 动态精度：尺寸的 0.1% (足够光滑且不用太多内存)
     double linear_deflection = diagonal * 0.001;
     if (linear_deflection < 0.01) linear_deflection = 0.01;
+    const double sampleSpacing = std::max(diagonal * 0.005, 0.25);
 
     BRepMesh_IncrementalMesh imesh(shape, linear_deflection, false, 0.5, true);
 
@@ -137,6 +150,33 @@ bool dianyun::LoadStepFileToPCL(const std::string& filename)
             int n1, n2, n3;
             tri.Get(n1, n2, n3);
 
+            const gp_Pnt gp1 = triangulation->Node(n1).Transformed(trsf);
+            const gp_Pnt gp2 = triangulation->Node(n2).Transformed(trsf);
+            const gp_Pnt gp3 = triangulation->Node(n3).Transformed(trsf);
+            const Eigen::Vector3d p1(gp1.X(), gp1.Y(), gp1.Z());
+            const Eigen::Vector3d p2(gp2.X(), gp2.Y(), gp2.Z());
+            const Eigen::Vector3d p3(gp3.X(), gp3.Y(), gp3.Z());
+            const double area = 0.5 * (p2 - p1).cross(p3 - p1).norm();
+            const int sampleCount = std::clamp(
+                static_cast<int>(std::ceil(area / (sampleSpacing * sampleSpacing))), 1, 1000);
+
+            // 低差异重心采样，让 CAD 点均匀覆盖三角面，而不是只集中在网格顶点。
+            for (int sample = 0; sample < sampleCount; ++sample) {
+                double u = std::fmod((sample + 1) * 0.6180339887498949, 1.0);
+                double v = std::fmod((sample + 1) * 0.4142135623730950, 1.0);
+                if (u + v > 1.0) {
+                    u = 1.0 - u;
+                    v = 1.0 - v;
+                }
+                const Eigen::Vector3d point = p1 + u * (p2 - p1) + v * (p3 - p1);
+                pcl::PointXYZRGB cadPoint;
+                cadPoint.x = static_cast<float>(point.x());
+                cadPoint.y = static_cast<float>(point.y());
+                cadPoint.z = static_cast<float>(point.z());
+                cadPoint.r = cadPoint.g = cadPoint.b = 200;
+                m_cadCloud->push_back(cadPoint);
+            }
+
             pcl::Vertices v;
             v.vertices.push_back(mesh_vertex_offset + n1 - 1);
             v.vertices.push_back(mesh_vertex_offset + n2 - 1);
@@ -154,6 +194,8 @@ bool dianyun::LoadStepFileToPCL(const std::string& filename)
     pcl::toPCLPointCloud2(*mesh_vertices, mesh->cloud);
     mesh->polygons = mesh_polygons;
 
+    if (m_cadCloud->empty()) pcl::copyPointCloud(*cloud, *m_cadCloud);
+
     return !cloud->empty();
 }
 
@@ -165,6 +207,7 @@ dianyun::dianyun(QWidget* parent) : QMainWindow(parent), ui(new Ui::dianyunClass
     ui->setupUi(this);
     cloud.reset(new pcl::PointCloud<pcl::PointXYZRGB>);
     mesh.reset(new pcl::PolygonMesh);
+    m_cadCloud.reset(new pcl::PointCloud<pcl::PointXYZRGB>); // 新增: 初始化 CAD 副本
 
     // 双视图：匹配 UI 文件中的 widget(3D) 和 widget_2(点云)
     if (ui->widget) {
@@ -188,32 +231,42 @@ dianyun::dianyun(QWidget* parent) : QMainWindow(parent), ui(new Ui::dianyunClass
     ui->groupBoxLog->setTitle(QString::fromUtf8("操作日志")); // 将Logs改为操作日志
     appendLog(QString::fromUtf8("系统已启动，操作日志就绪。"));
 
+    // ==========================================
+    // 注册跨线程信号槽需要的自定义类型
+    // ==========================================
     qRegisterMetaType<pcl::PointCloud<pcl::PointXYZRGB>::Ptr>("pcl::PointCloud<pcl::PointXYZRGB>::Ptr");
+    qRegisterMetaType<pcl::PointCloud<pcl::PointXYZ>::Ptr>("pcl::PointCloud<pcl::PointXYZ>::Ptr");
+    qRegisterMetaType<Eigen::Matrix4f>("Eigen::Matrix4f");
+    qRegisterMetaType<MatchResult>("MatchResult");
 
-    plyWorker = new PlyDirectoryWorker(
-        QString::fromUtf8("E:/document/images/MV-DP2240-01H(00DA0491289)"), this);
+    // ==========================================
+    // 模型匹配模块：线程与 Worker 初始化
+    // ==========================================
+    m_matchThread = new QThread(this);
+    m_matchWorker = new ModelMatchWorker(); // 注意：绝不能传 this
+    m_matchWorker->moveToThread(m_matchThread);
 
-    connect(plyWorker, &PlyDirectoryWorker::statusMessage,
-            this, &dianyun::appendLog);
+    // 绑定匹配模块的全新信号与主界面的槽
+    connect(m_matchThread, &QThread::started, m_matchWorker, &ModelMatchWorker::run);
+    connect(m_matchWorker, &ModelMatchWorker::progress, this, &dianyun::onMatchProgress);
+    connect(m_matchWorker, &ModelMatchWorker::processedScanReady,
+        this, &dianyun::onProcessedScanReady);
+    connect(m_matchWorker, &ModelMatchWorker::finished, this, &dianyun::onMatchFinished);
 
-    connect(plyWorker, &PlyDirectoryWorker::cloudLoaded,
-            this, &dianyun::onCloudLoaded);
-
-    connect(plyWorker, &PlyDirectoryWorker::loadFailed,
-            this, [this](const QString& reason, const QString& filePath) {
-                appendLog(QString::fromUtf8("点云加载失败：") +
-                          QFileInfo(filePath).fileName() +
-                          QString::fromUtf8("，原因：") + reason);
-            });
-
-    plyWorker->start();
+    // 确保线程结束时清理内存 (不 delete worker)
+    connect(m_matchWorker, &ModelMatchWorker::finished, m_matchThread, &QThread::quit);
 }
 
 dianyun::~dianyun()
 {
-    if (plyWorker) {
-        plyWorker->stop();
+    // ==========================================
+    // 安全退出模型匹配线程
+    // ==========================================
+    if (m_matchThread && m_matchThread->isRunning()) {
+        m_matchThread->quit();
+        m_matchThread->wait(); // 阻塞等待彻底结束
     }
+
     delete ui;
 }
 
@@ -229,42 +282,13 @@ void dianyun::appendLog(const QString& msg)
     }
 }
 
-void dianyun::onCloudLoaded(pcl::PointCloud<pcl::PointXYZRGB>::Ptr newCloud, const QString& filePath)
-{
-    if (!newCloud || newCloud->empty()) {
-        appendLog(QString::fromUtf8("点云数据为空，渲染取消。"));
-        return;
-    }
-
-    cloud = newCloud;
-
-    if (viewerCloud) {
-        viewerCloud->removeAllPointClouds();
-        viewerCloud->removeAllShapes();
-
-        pcl::visualization::PointCloudColorHandlerGenericField<pcl::PointXYZRGB> z_color(cloud, "z");
-        viewerCloud->addPointCloud<pcl::PointXYZRGB>(cloud, z_color, "point_cloud");
-
-        pcl::PointXYZRGB minPt, maxPt;
-        pcl::getMinMax3D(*cloud, minPt, maxPt);
-
-        double scale = (maxPt.getVector3fMap() - minPt.getVector3fMap()).norm() * 0.03;
-        if (scale < 0.1) scale = 0.1;
-        viewerCloud->addCoordinateSystem(scale);
-
-        viewerCloud->resetCamera();
-    }
-
-    appendLog(QString::fromUtf8("点云加载完成：") + QFileInfo(filePath).fileName());
-}
-
 // =========================================================================
 // 初始化视窗（分别为3D模型和点云模型创建Viewer）
 // =========================================================================
 void dianyun::initialWindow()
 {
     // 渲染器 3D
-    if(ui->widget) {
+    if (ui->widget) {
         auto vtkWidget3D = new QVTKOpenGLNativeWidget(ui->widget);
         auto layout3D = new QVBoxLayout(ui->widget);
         layout3D->setContentsMargins(0, 0, 0, 0);
@@ -282,7 +306,7 @@ void dianyun::initialWindow()
     }
 
     // 渲染器 Cloud
-    if(ui->widget_2) {
+    if (ui->widget_2) {
         auto vtkWidgetCloud = new QVTKOpenGLNativeWidget(ui->widget_2);
         auto layoutCloud = new QVBoxLayout(ui->widget_2);
         layoutCloud->setContentsMargins(0, 0, 0, 0);
@@ -401,10 +425,6 @@ void dianyun::highlightFaceMesh(int face_id, std::string id)
     viewer3D->spinOnce(100, true);
 }
 
-// 顶部确保包含以下头文件
-#include <BRepExtrema_DistShapeShape.hxx>
-#include <TopExp.hxx>
-
 // =========================================================================
 // 核心逻辑 4：VTK 网格求交 
 // =========================================================================
@@ -419,7 +439,7 @@ void dianyun::CalculateSeam_OCCT()
 
     appendLog(QString::fromUtf8("触发了特征面相交算法。"));
     appendLog(QString::fromUtf8("选定面 A ID: ") + QString::number(m_selected_face_id_A) +
-              QString::fromUtf8("，面 B ID: ") + QString::number(m_selected_face_id_B));
+        QString::fromUtf8("，面 B ID: ") + QString::number(m_selected_face_id_B));
 
     TopoDS_Face faceA = m_model_faces[m_selected_face_id_A];
     TopoDS_Face faceB = m_model_faces[m_selected_face_id_B];
@@ -439,12 +459,17 @@ void dianyun::CalculateSeam_OCCT()
 
     seam_counter++;
     QString seamName = QString::fromUtf8("焊缝-") + QString::number(seam_counter);
-    if(ui->listWeldSeams) {
+    if (ui->listWeldSeams) {
         ui->listWeldSeams->addItem(seamName);
     }
 
     int segmentCount = 0;
     int edgeIndex = 0;
+    double totalLength = 0.0;
+
+    // 新增：用于暂存当前焊缝离散点云的容器，以便喂给模型匹配模块
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr currentSeamCloud(new pcl::PointCloud<pcl::PointXYZRGB>());
+
     for (TopExp_Explorer edgeExp(seamShape, TopAbs_EDGE); edgeExp.More(); edgeExp.Next(), ++edgeIndex)
     {
         TopoDS_Edge edge = TopoDS::Edge(edgeExp.Current());
@@ -455,6 +480,8 @@ void dianyun::CalculateSeam_OCCT()
         if (last <= first) continue;
 
         double length = GCPnts_AbscissaPoint::Length(curve, first, last);
+        totalLength += length;
+
         int sampleCount = static_cast<int>(length / 1.5);
         if (sampleCount < 8) sampleCount = 8;
 
@@ -464,6 +491,12 @@ void dianyun::CalculateSeam_OCCT()
         {
             double t = first + (last - first) * static_cast<double>(i) / static_cast<double>(sampleCount);
             gp_Pnt p = curve.Value(t);
+
+            // --- 保存焊缝点数据，为特征加权 ICP 提供源数据 ---
+            pcl::PointXYZRGB seamPt;
+            seamPt.x = p.X(); seamPt.y = p.Y(); seamPt.z = p.Z();
+            seamPt.r = 0; seamPt.g = 255; seamPt.b = 0;
+            currentSeamCloud->push_back(seamPt);
 
             if (hasPrev) {
                 pcl::PointXYZ p1(prevPoint.X(), prevPoint.Y(), prevPoint.Z());
@@ -488,6 +521,15 @@ void dianyun::CalculateSeam_OCCT()
         return;
     }
 
+    // --- 将生成的焊缝点云保存到系统列表中 ---
+    WeldSeamData newSeam;
+    newSeam.id = std::to_string(seam_counter);
+    newSeam.name = seamName;
+    newSeam.points = currentSeamCloud;
+    newSeam.length = totalLength;
+    seam_list.push_back(newSeam);
+    // ------------------------------------------
+
     // 焊缝生成后，恢复被选面的原始显示状态
     viewer3D->removePolygonMesh("highlight_A");
     viewer3D->removePolygonMesh("highlight_B");
@@ -508,17 +550,17 @@ void dianyun::on_btnOpen_clicked()
     if (qFilename.isEmpty()) return;
 
     appendLog(QString::fromUtf8("正在导入三维模型: ") + QFileInfo(qFilename).fileName());
-    
+
     // OCCT 内部主要支持 UTF-8 编码路径
     if (LoadStepFileToPCL(qFilename.toUtf8().toStdString())) {
         viewer3D->removeAllPointClouds();
         viewer3D->removeAllShapes();
         viewer3D->addPolygonMesh(*mesh, "mesh_model");
         viewer3D->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, 0.8, 0.8, 0.8, "mesh_model");
-        
+
         pcl::PointXYZRGB minPt, maxPt;
         pcl::getMinMax3D(*cloud, minPt, maxPt);
-        
+
         // 左侧网格窗口同样将坐标轴缩减至全局尺寸包围盒对角线的 3% (0.03)
         double scale = (maxPt.getVector3fMap() - minPt.getVector3fMap()).norm() * 0.03;
         if (scale < 0.1) scale = 0.1;
@@ -526,7 +568,8 @@ void dianyun::on_btnOpen_clicked()
 
         viewer3D->resetCamera();
         appendLog(QString::fromUtf8("三维模型导入成功！"));
-    } else {
+    }
+    else {
         appendLog(QString::fromUtf8("三维模型导入失败。"));
     }
 }
@@ -543,25 +586,35 @@ void dianyun::on_btnOpen_2_clicked()
 
     cloud->clear();
     std::string ext = QFileInfo(qFilename).suffix().toLower().toStdString();
-    
+
     // PCL IO 处理本地路径时依赖 Local8Bit (GBK) 编码
     if (ext == "pcd") {
         pcl::io::loadPCDFile(qFilename.toLocal8Bit().toStdString(), *cloud);
-    } else if (ext == "ply") {
+    }
+    else if (ext == "ply") {
         pcl::io::loadPLYFile(qFilename.toLocal8Bit().toStdString(), *cloud);
     }
+
+    // 海康导出的有序 PLY 会用大量 (0,0,0) 填充无效像素，进入配准前必须删除。
+    cloud->points.erase(std::remove_if(cloud->points.begin(), cloud->points.end(),
+        [](const pcl::PointXYZRGB& point) {
+            return !pcl::isFinite(point) || point.getVector3fMap().squaredNorm() < 1e-12f;
+        }), cloud->points.end());
+    cloud->width = static_cast<std::uint32_t>(cloud->points.size());
+    cloud->height = 1;
+    cloud->is_dense = true;
 
     if (!cloud->empty()) {
         viewerCloud->removeAllPointClouds();
         viewerCloud->removeAllShapes();
-        
+
         // 使用 Z 轴高速伪彩色渲染代替原生 RGB，解决模型偏黑无色彩的问题
         pcl::visualization::PointCloudColorHandlerGenericField<pcl::PointXYZRGB> z_color(cloud, "z");
         viewerCloud->addPointCloud<pcl::PointXYZRGB>(cloud, z_color, "point_cloud");
-        
+
         pcl::PointXYZRGB minPt, maxPt;
         pcl::getMinMax3D(*cloud, minPt, maxPt);
-        
+
         // 将坐标轴缩放比例从 15% (0.15) 大幅减小至 3% (0.03)，避免遮挡模型
         double scale = (maxPt.getVector3fMap() - minPt.getVector3fMap()).norm() * 0.03;
         if (scale < 0.1) scale = 0.1;
@@ -569,7 +622,8 @@ void dianyun::on_btnOpen_2_clicked()
 
         viewerCloud->resetCamera();
         appendLog(QString::fromUtf8("点云模型导入成功！节点数：") + QString::number(cloud->points.size()));
-    } else {
+    }
+    else {
         appendLog(QString::fromUtf8("点云模型导入失败。"));
     }
 }
@@ -596,7 +650,7 @@ void dianyun::on_btnNewSeam_clicked() {
 
 void dianyun::on_btnCancel_clicked() {
     current_state = STATE_IDLE;
-    if(viewer3D){
+    if (viewer3D) {
         viewer3D->removePolygonMesh("highlight_A");
         viewer3D->removePolygonMesh("highlight_B");
         viewer3D->spinOnce(100, true);
@@ -606,7 +660,7 @@ void dianyun::on_btnCancel_clicked() {
 }
 
 void dianyun::on_btnDeleteSeam_clicked() {
-    if(ui->listWeldSeams){
+    if (ui->listWeldSeams) {
         int row = ui->listWeldSeams->currentRow();
         if (row < 0) return;
         QListWidgetItem* item = ui->listWeldSeams->takeItem(row);
@@ -616,13 +670,13 @@ void dianyun::on_btnDeleteSeam_clicked() {
 }
 
 void dianyun::on_listWeldSeams_itemClicked(QListWidgetItem* item) {
-    if(!item) return;
+    if (!item) return;
     appendLog(QString::fromUtf8("选中记录：") + item->text());
 }
 
 void dianyun::updatePCLWindow() {
-    if(viewer3D) viewer3D->spinOnce(10, true);
-    if(viewerCloud) viewerCloud->spinOnce(10, true);
+    if (viewer3D) viewer3D->spinOnce(10, true);
+    if (viewerCloud) viewerCloud->spinOnce(10, true);
 }
 
 void dianyun::adjustWindowSize() {
@@ -632,4 +686,175 @@ void dianyun::adjustWindowSize() {
 void dianyun::resizeEvent(QResizeEvent* event) {
     QMainWindow::resizeEvent(event);
     adjustWindowSize();
+}
+
+// =========================================================================
+// 点击界面的“开始拍摄”按钮
+// =========================================================================
+void dianyun::on_btnOpenCamera_clicked()
+{
+    if (!m_cameraWorker) {
+        m_cameraWorker = new HikCameraWorker(this);
+        connect(m_cameraWorker, &HikCameraWorker::pointCloudReady,
+            this, &dianyun::onCameraPointCloudReady);
+    }
+
+    appendLog(QString::fromUtf8("正在尝试独占连接 3D 相机..."));
+
+    if (m_cameraWorker->openCamera()) {
+        appendLog(QString::fromUtf8("🚀 相机连接成功！后台正在实时捕获 2D 轮廓并拼装 3D 模型..."));
+    }
+    else {
+        appendLog(QString::fromUtf8("❌ 相机打开失败！请确认：\n1.网线是否连接紧密。\n2.海康 3DMVS 软件是否已经彻底关闭！"));
+    }
+}
+
+// =========================================================================
+// 接收后台拼装完毕的 3D 点云，并进行终极渲染
+// =========================================================================
+void dianyun::onCameraPointCloudReady(pcl::PointCloud<pcl::PointXYZRGB>::Ptr newCloud)
+{
+    if (!newCloud || newCloud->empty()) return;
+
+    pcl::copyPointCloud(*newCloud, *cloud);
+
+    if (viewerCloud) {
+        viewerCloud->removeAllPointClouds();
+        viewerCloud->removeAllShapes();
+
+        pcl::visualization::PointCloudColorHandlerGenericField<pcl::PointXYZRGB> z_color(cloud, "z");
+        viewerCloud->addPointCloud<pcl::PointXYZRGB>(cloud, z_color, "point_cloud");
+
+        pcl::PointXYZRGB minPt, maxPt;
+        pcl::getMinMax3D(*cloud, minPt, maxPt);
+        double scale = (maxPt.getVector3fMap() - minPt.getVector3fMap()).norm() * 0.03;
+        if (scale < 0.1) scale = 0.1;
+        viewerCloud->addCoordinateSystem(scale);
+
+        viewerCloud->resetCamera();
+        viewerCloud->spinOnce(1, true);
+    }
+
+    appendLog(QString::fromUtf8("🎉 实时拼接并渲染完成！总节点数：") + QString::number(cloud->points.size()));
+}
+
+// ==============================================================================
+// 模型匹配模块：触发与回调实现
+// ==============================================================================
+void dianyun::on_btnOpen_3_clicked()
+{
+    if (!m_cadCloud || m_cadCloud->empty()) {
+        appendLog(QString::fromUtf8("请先导入三维模型。")); return;
+    }
+    if (!cloud || cloud->empty()) {
+        appendLog(QString::fromUtf8("请先导入点云模型。")); return;
+    }
+    if (m_matchThread->isRunning()) {
+        appendLog(QString::fromUtf8("匹配正在进行中,请稍候。")); return;
+    }
+
+    appendLog(QString::fromUtf8("开始模型匹配流水线..."));
+    if (ui->btnOpen_3) ui->btnOpen_3->setEnabled(false);
+    if (ui->lblStatus) ui->lblStatus->setText(QString::fromUtf8("当前状态：匹配中"));
+
+    // 1. 深拷贝数据，防止后台计算时主界面被乱点导致崩溃
+    auto cadCopy = std::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(*m_cadCloud);
+    auto scanCopy = std::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(*cloud);
+    appendLog(QString::fromUtf8("匹配输入：全场景自动分割与CAD引导裁剪。"));
+
+    // 2. 打包焊缝数据
+    std::vector<pcl::PointCloud<pcl::PointXYZRGB>::Ptr> seamPts;
+    std::vector<QString> seamNames;
+    for (auto& s : seam_list) {
+        seamPts.push_back(std::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>(*s.points));
+        seamNames.push_back(s.name);
+    }
+
+    // 3. 送入算法引擎并启动线程！
+    MatchConfig cfg;
+    m_matchWorker->setInput(cadCopy, scanCopy, seamPts, seamNames, cfg);
+    m_matchThread->start();
+}
+
+void dianyun::onMatchProgress(QString stage)
+{
+    if (ui->lblStatus) ui->lblStatus->setText(QString::fromUtf8("当前状态：") + stage);
+    appendLog(QString::fromUtf8("进度: ") + stage);
+}
+
+void dianyun::onProcessedScanReady(pcl::PointCloud<pcl::PointXYZRGB>::Ptr processedCloud)
+{
+    if (!processedCloud || processedCloud->empty() || !viewerCloud) return;
+
+    // 匹配仅使用这个浅蓝色点云；原始扫描数据仍保留在 cloud 中，不会被改写。
+    viewerCloud->removePointCloud("point_cloud");
+    viewerCloud->removePointCloud("match_input");
+    pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZRGB>
+        color(processedCloud, 80, 220, 255);
+    viewerCloud->addPointCloud<pcl::PointXYZRGB>(processedCloud, color, "match_input");
+    viewerCloud->setPointCloudRenderingProperties(
+        pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 3.0, "match_input");
+    viewerCloud->spinOnce(1, true);
+    appendLog(QString::fromUtf8("已显示实际参与匹配的工件候选点云：") +
+        QString::number(processedCloud->size()) + QString::fromUtf8(" 点。"));
+}
+
+void dianyun::onMatchFinished(MatchResult result)
+{
+    m_lastMatchResult = result;
+    if (ui->btnOpen_3) ui->btnOpen_3->setEnabled(true);
+
+    if (!result.success) {
+        if (ui->lblStatus) ui->lblStatus->setText(QString::fromUtf8("当前状态：匹配失败"));
+        appendLog(QString::fromUtf8("匹配失败：") + result.errorMessage);
+        return;
+    }
+
+    if (ui->lblStatus) {
+        const QString status = result.verdict == MatchVerdict::Pass
+            ? QString::fromUtf8("当前状态：匹配通过")
+            : (result.verdict == MatchVerdict::NeedsReview
+                ? QString::fromUtf8("当前状态：需要人工确认")
+                : QString::fromUtf8("当前状态：匹配质量不足"));
+        ui->lblStatus->setText(status);
+    }
+    appendLog(QString::fromUtf8("匹配计算完成：") + result.verdictMessage);
+    appendLog(QString::fromUtf8("局部覆盖率：%1%，RMSE：%2，P95残差：%3")
+        .arg(result.overlapRatio * 100.0f, 0, 'f', 1)
+        .arg(result.rmse, 0, 'f', 3)
+        .arg(result.p95Residual, 0, 'f', 3));
+    appendLog(QString::fromUtf8(
+        "CAD反向支持：%1%，关键特征覆盖：%2%，空间结构覆盖：%3%，法向一致性：%4%")
+        .arg(result.reverseOverlapRatio * 100.0f, 0, 'f', 1)
+        .arg(result.featureOverlapRatio * 100.0f, 0, 'f', 1)
+        .arg(result.spatialCoverageRatio * 100.0f, 0, 'f', 1)
+        .arg(result.normalConsistency * 100.0f, 0, 'f', 1));
+    if (!result.coarseCandidateReport.isEmpty()) {
+        appendLog(result.coarseCandidateReport);
+    }
+
+    // 如果有歧义，弹出提示
+    if (result.wasAmbiguous) {
+        appendLog(QString::fromUtf8("⚠ 粗配准存在多解歧义，已自动选取适应度最优解。"));
+    }
+
+    if (result.verdict == MatchVerdict::Fail) {
+        appendLog(QString::fromUtf8("结果未达到质量门槛，不显示对齐后的CAD模型。"));
+        return;
+    }
+
+    // 将匹配好的 CAD 模型渲染到右侧点云窗口
+    if (viewerCloud) {
+        pcl::PointCloud<pcl::PointXYZRGB>::Ptr cadTransformed(new pcl::PointCloud<pcl::PointXYZRGB>());
+        pcl::transformPointCloud(*m_cadCloud, *cadTransformed, result.T_final);
+
+        viewerCloud->removePointCloud("cad_aligned");
+        pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZRGB> cadColor(cadTransformed, 150, 150, 150);
+        viewerCloud->addPointCloud<pcl::PointXYZRGB>(cadTransformed, cadColor, "cad_aligned");
+        // 设为半透明，方便和实物点云重叠比对
+        viewerCloud->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.5, "cad_aligned");
+
+        viewerCloud->spinOnce(50, true);
+        appendLog(QString::fromUtf8("已将对齐后的CAD模型渲染至点云视图。"));
+    }
 }

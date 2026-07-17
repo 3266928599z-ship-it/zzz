@@ -32,13 +32,7 @@
     <QtMoc Include="dianyun.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="plydirectoryworker.h">
-      <Filter>Header Files</Filter>
-    </QtMoc>
     <ClCompile Include="dianyun.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="plydirectoryworker.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -46,5 +40,19 @@
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="HikCameraWorker.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ModelMatchWorker.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="HikCameraWorker.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
+    <QtMoc Include="ModelMatchWorker.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
   </ItemGroup>
 </Project>
