@@ -55,6 +55,8 @@ dianyun::dianyun(QWidget* parent)
         this, &dianyun::onProcessedScanReady);
     connect(m_matchController, &ModelMatchController::finished,
         this, &dianyun::onMatchFinished);
+    connect(m_matchController, &ModelMatchController::busyChanged,
+        this, [this](bool) { updateMapSeamButtonState(); });
 
     m_pointCloudLoadController = new PointCloudLoadController(this);
     connect(m_pointCloudLoadController, &PointCloudLoadController::progress,
@@ -67,6 +69,7 @@ dianyun::dianyun(QWidget* parent)
         this, &dianyun::onPointCloudLoadBusyChanged);
 
     updateStatusUI();
+    updateMapSeamButtonState();
     if (ui->groupBoxLog) {
         ui->groupBoxLog->setTitle(QString::fromUtf8("操作日志"));
     }
@@ -162,6 +165,8 @@ void dianyun::resetSeamSelection()
 
 void dianyun::clearSeams()
 {
+    m_visualization.clearSeamSelection();
+    clearMappedSeamResults();
     for (const auto& seam : m_seams) {
         m_visualization.removeSeam(seam);
     }
@@ -169,6 +174,43 @@ void dianyun::clearSeams()
     m_seamCounter = 0;
     if (ui->listWeldSeams) ui->listWeldSeams->clear();
     resetSeamSelection();
+    updateMapSeamButtonState();
+}
+
+void dianyun::clearMappedSeamResults()
+{
+    m_visualization.clearMappedSeams();
+    m_mappedSeams.clear();
+    updateMapSeamButtonState();
+}
+
+const WeldSeamData* dianyun::selectedSeam() const
+{
+    if (!ui->listWeldSeams || !ui->listWeldSeams->currentItem()) {
+        return nullptr;
+    }
+
+    const std::string seamId = ui->listWeldSeams->currentItem()
+        ->data(Qt::UserRole).toString().toStdString();
+    const auto seam = std::find_if(
+        m_seams.cbegin(), m_seams.cend(),
+        [&seamId](const WeldSeamData& candidate) {
+            return candidate.id == seamId;
+        });
+    return seam == m_seams.cend() ? nullptr : &(*seam);
+}
+
+void dianyun::updateMapSeamButtonState()
+{
+    if (!ui || !ui->btnMapSeam) return;
+    const bool matchRunning = m_matchController &&
+        m_matchController->isRunning();
+    const bool cloudLoading = m_pointCloudLoadController &&
+        m_pointCloudLoadController->isRunning();
+    ui->btnMapSeam->setEnabled(
+        selectedSeam() && m_lastMatchResult.success &&
+        m_lastMatchResult.verdict == MatchVerdict::Pass &&
+        !matchRunning && !cloudLoading);
 }
 
 void dianyun::mouseEventOccurred(
@@ -202,9 +244,6 @@ void dianyun::mouseEventOccurred(
     }
 
     const int faceId = m_cadModel.cellToFaceMap[static_cast<size_t>(cellId)];
-    appendLog(QString::fromUtf8("选中网格单元 %1，对应CAD面 %2。")
-        .arg(cellId).arg(faceId));
-
     if (m_state == STATE_PICK_FACE_A) {
         m_selectedFaceA = faceId;
         m_visualization.highlightFace(
@@ -238,8 +277,6 @@ void dianyun::createSelectedSeam()
         return;
     }
 
-    appendLog(QString::fromUtf8("正在计算CAD面 %1 与面 %2 的交线...")
-        .arg(m_selectedFaceA).arg(m_selectedFaceB));
     WeldSeamData seam;
     QString errorMessage;
     const int nextIndex = m_seamCounter + 1;
@@ -256,10 +293,15 @@ void dianyun::createSelectedSeam()
     m_seamCounter = nextIndex;
     m_visualization.showSeam(seam);
     m_seams.push_back(seam);
-    if (ui->listWeldSeams) ui->listWeldSeams->addItem(seam.name);
-    appendLog(QString::fromUtf8("已生成分析项：") + seam.name);
-    appendLog(QString::fromUtf8("焊缝长度 %1，线段数 %2。")
-        .arg(seam.length, 0, 'f', 3).arg(seam.segments.size()));
+    if (ui->listWeldSeams) {
+        auto* item = new QListWidgetItem(seam.name);
+        item->setData(Qt::UserRole, QString::fromStdString(seam.id));
+        ui->listWeldSeams->addItem(item);
+    }
+    appendLog(QString::fromUtf8("已创建%1：长度 %2，%3 个管道段。")
+        .arg(seam.name)
+        .arg(seam.length, 0, 'f', 3)
+        .arg(seam.segments.size()));
     resetSeamSelection();
 }
 
@@ -282,6 +324,7 @@ void dianyun::on_btnOpen_clicked()
     clearSeams();
     m_cadModel = std::move(loadedModel);
     m_lastMatchResult = MatchResult();
+    updateMapSeamButtonState();
     m_visualization.showCadModel(m_cadModel);
     appendLog(QString::fromUtf8("三维模型导入成功，CAD采样点数：") +
         QString::number(m_cadModel.sampleCloud->size()));
@@ -314,7 +357,9 @@ void dianyun::onPointCloudLoadFinished(CloudRGB::Ptr loadedCloud, double diagona
     }
 
     m_scanCloud = std::move(loadedCloud);
+    clearMappedSeamResults();
     m_lastMatchResult = MatchResult();
+    updateMapSeamButtonState();
     m_visualization.showScanCloud(m_scanCloud, diagonal);
     m_reportProgressiveRender = true;
     m_lastRenderPercent = -1;
@@ -346,6 +391,7 @@ void dianyun::onPointCloudLoadBusyChanged(bool busy)
     if (busy && ui->lblStatus) {
         ui->lblStatus->setText(QString::fromUtf8("当前状态：正在后台加载点云"));
     }
+    updateMapSeamButtonState();
 }
 
 void dianyun::on_btnNewSeam_clicked()
@@ -366,25 +412,76 @@ void dianyun::on_btnNewSeam_clicked()
 void dianyun::on_btnCancel_clicked()
 {
     resetSeamSelection();
-    appendLog(QString::fromUtf8("已取消当前操作。"));
+}
+
+void dianyun::on_btnMapSeam_clicked()
+{
+    const WeldSeamData* seam = selectedSeam();
+    if (!seam) {
+        appendLog(QString::fromUtf8("请先在焊缝列表中选择一条焊缝。"));
+        updateMapSeamButtonState();
+        return;
+    }
+    if (!m_lastMatchResult.success ||
+        m_lastMatchResult.verdict != MatchVerdict::Pass) {
+        appendLog(QString::fromUtf8(
+            "最新模型匹配尚未通过，不能进行焊缝映射。"));
+        updateMapSeamButtonState();
+        return;
+    }
+
+    WeldSeamData mappedSeam;
+    QString errorMessage;
+    if (!m_weldSeamService.mapSeam(
+        *seam, m_lastMatchResult.T_final, mappedSeam, errorMessage)) {
+        appendLog(QString::fromUtf8("焊缝映射失败：") + errorMessage);
+        return;
+    }
+
+    const std::string seamId = seam->id;
+    m_mappedSeams.insert_or_assign(seamId, mappedSeam);
+    m_visualization.showMappedSeam(mappedSeam);
+    appendLog(QString::fromUtf8(
+        "%1映射完成：%2 个采样点，%3 个管道段。")
+        .arg(mappedSeam.name)
+        .arg(mappedSeam.points ? mappedSeam.points->size() : 0)
+        .arg(mappedSeam.segments.size()));
 }
 
 void dianyun::on_btnDeleteSeam_clicked()
 {
     if (!ui->listWeldSeams) return;
-    const int row = ui->listWeldSeams->currentRow();
-    if (row < 0 || static_cast<size_t>(row) >= m_seams.size()) return;
+    const WeldSeamData* selected = selectedSeam();
+    if (!selected) return;
 
-    const QString name = m_seams[row].name;
-    m_visualization.removeSeam(m_seams[row]);
-    m_seams.erase(m_seams.begin() + row);
+    const int row = ui->listWeldSeams->currentRow();
+    const std::string seamId = selected->id;
+    const QString name = selected->name;
+    m_visualization.removeSeam(*selected);
+    m_visualization.removeMappedSeam(seamId);
+    m_mappedSeams.erase(seamId);
+    const auto seam = std::find_if(
+        m_seams.begin(), m_seams.end(),
+        [&seamId](const WeldSeamData& candidate) {
+            return candidate.id == seamId;
+        });
+    if (seam != m_seams.end()) m_seams.erase(seam);
     delete ui->listWeldSeams->takeItem(row);
-    appendLog(QString::fromUtf8("删除了记录：") + name);
+    appendLog(QString::fromUtf8("已删除焊缝：") + name);
+    updateMapSeamButtonState();
 }
 
-void dianyun::on_listWeldSeams_itemClicked(QListWidgetItem* item)
+void dianyun::on_listWeldSeams_currentItemChanged(
+    QListWidgetItem* current, QListWidgetItem*)
 {
-    if (item) appendLog(QString::fromUtf8("选中记录：") + item->text());
+    if (current) {
+        m_visualization.selectSeam(
+            current->data(Qt::UserRole).toString().toStdString());
+    }
+    else {
+        m_visualization.clearSeamSelection();
+    }
+    updateMapSeamButtonState();
 }
 
 void dianyun::updatePCLWindow()
@@ -442,6 +539,9 @@ void dianyun::on_btnOpenCamera_clicked()
 void dianyun::onCameraPointCloudReady(CloudRGB::Ptr newCloud)
 {
     if (!newCloud || newCloud->empty()) return;
+    clearMappedSeamResults();
+    m_lastMatchResult = MatchResult();
+    updateMapSeamButtonState();
     m_scanCloud = std::move(newCloud);
     m_visualization.showScanCloud(m_scanCloud);
     m_reportProgressiveRender = true;
@@ -476,8 +576,11 @@ void dianyun::on_btnOpen_3_clicked()
         return;
     }
 
-    appendLog(QString::fromUtf8("开始模型匹配流水线..."));
-    appendLog(QString::fromUtf8("匹配输入：全场景自动分割与CAD引导裁剪。"));
+    clearMappedSeamResults();
+    m_lastMatchResult = MatchResult();
+    updateMapSeamButtonState();
+    appendLog(QString::fromUtf8(
+        "模型匹配开始：全场景自动分割与CAD引导裁剪。"));
     if (ui->btnOpen_3) ui->btnOpen_3->setEnabled(false);
     if (ui->lblStatus) {
         ui->lblStatus->setText(QString::fromUtf8("当前状态：匹配中"));
@@ -489,20 +592,18 @@ void dianyun::onMatchProgress(QString stage)
     if (ui->lblStatus) {
         ui->lblStatus->setText(QString::fromUtf8("当前状态：") + stage);
     }
-    appendLog(QString::fromUtf8("进度：") + stage);
 }
 
 void dianyun::onProcessedScanReady(CloudRGB::Ptr processedCloud)
 {
     if (!processedCloud || processedCloud->empty()) return;
     m_visualization.showProcessedScan(processedCloud);
-    appendLog(QString::fromUtf8("已显示实际参与匹配的工件候选点云：") +
-        QString::number(processedCloud->size()) + QString::fromUtf8(" 点。"));
 }
 
 void dianyun::onMatchFinished(MatchResult result)
 {
     m_lastMatchResult = result;
+    updateMapSeamButtonState();
     if (ui->btnOpen_3) {
         ui->btnOpen_3->setEnabled(!m_reportProgressiveRender &&
             m_pointCloudLoadController &&
@@ -524,23 +625,30 @@ void dianyun::onMatchFinished(MatchResult result)
             : QString::fromUtf8("当前状态：匹配质量不足"));
     if (ui->lblStatus) ui->lblStatus->setText(status);
 
-    appendLog(QString::fromUtf8("匹配计算完成：") + result.verdictMessage);
-    appendLog(QString::fromUtf8("局部覆盖率：%1%，RMSE：%2，P95残差：%3")
+    appendLog(QString::fromUtf8("%1：覆盖率 %2%，RMSE %3，P95 %4。")
+        .arg(result.verdict == MatchVerdict::Pass
+            ? QString::fromUtf8("模型匹配通过")
+            : (result.verdict == MatchVerdict::NeedsReview
+                ? QString::fromUtf8("模型匹配需要人工确认")
+                : QString::fromUtf8("模型匹配质量不足")))
         .arg(result.overlapRatio * 100.0f, 0, 'f', 1)
         .arg(result.rmse, 0, 'f', 3)
         .arg(result.p95Residual, 0, 'f', 3));
-    appendLog(QString::fromUtf8(
-        "CAD反向支持：%1%，关键特征覆盖：%2%，空间结构覆盖：%3%，法向一致性：%4%")
-        .arg(result.reverseOverlapRatio * 100.0f, 0, 'f', 1)
-        .arg(result.featureOverlapRatio * 100.0f, 0, 'f', 1)
-        .arg(result.spatialCoverageRatio * 100.0f, 0, 'f', 1)
-        .arg(result.normalConsistency * 100.0f, 0, 'f', 1));
-    if (!result.coarseCandidateReport.isEmpty()) {
-        appendLog(result.coarseCandidateReport);
-    }
-    if (result.wasAmbiguous) {
+
+    if (result.verdict != MatchVerdict::Pass) {
         appendLog(QString::fromUtf8(
-            "粗配准存在多解歧义，已自动选取适应度最优解。"));
+            "诊断：CAD支持 %1%，特征覆盖 %2%，空间覆盖 %3%，法向一致性 %4%。")
+            .arg(result.reverseOverlapRatio * 100.0f, 0, 'f', 1)
+            .arg(result.featureOverlapRatio * 100.0f, 0, 'f', 1)
+            .arg(result.spatialCoverageRatio * 100.0f, 0, 'f', 1)
+            .arg(result.normalConsistency * 100.0f, 0, 'f', 1));
+        if (!result.coarseCandidateReport.isEmpty()) {
+            appendLog(result.coarseCandidateReport);
+        }
+        if (result.wasAmbiguous) {
+            appendLog(QString::fromUtf8(
+                "粗配准存在多解歧义，已选择适应度最优解。"));
+        }
     }
 
     if (result.verdict == MatchVerdict::Fail) {
@@ -551,5 +659,4 @@ void dianyun::onMatchFinished(MatchResult result)
 
     m_visualization.showAlignedCad(
         m_cadModel.sampleCloud, result.T_final);
-    appendLog(QString::fromUtf8("已将对齐后的CAD模型渲染至点云视图。"));
 }

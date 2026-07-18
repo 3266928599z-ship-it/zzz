@@ -129,6 +129,16 @@
         </widget>
        </item>
        <item>
+        <widget class="QPushButton" name="btnMapSeam">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="text">
+          <string>焊缝映射</string>
+         </property>
+        </widget>
+       </item>
+       <item>
         <widget class="QPushButton" name="btnCancel">
          <property name="text">
           <string>取消操作</string>

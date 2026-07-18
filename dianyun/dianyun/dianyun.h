@@ -22,6 +22,7 @@
 
 #include <pcl/visualization/pcl_visualizer.h>
 
+#include <unordered_map>
 #include <vector>
 
 namespace Ui { class dianyunClass; }
@@ -52,9 +53,11 @@ private slots:
     void onMatchFinished(MatchResult result);
 
     void on_btnNewSeam_clicked();
+    void on_btnMapSeam_clicked();
     void on_btnCancel_clicked();
     void on_btnDeleteSeam_clicked();
-    void on_listWeldSeams_itemClicked(QListWidgetItem* item);
+    void on_listWeldSeams_currentItemChanged(
+        QListWidgetItem* current, QListWidgetItem* previous);
     void updatePCLWindow();
 
 private:
@@ -73,6 +76,7 @@ private:
     CloudRGB::Ptr m_scanCloud = CloudRGB::Ptr(new CloudRGB());
     MatchResult m_lastMatchResult;
     std::vector<WeldSeamData> m_seams;
+    std::unordered_map<std::string, WeldSeamData> m_mappedSeams;
 
     pcl::visualization::PCLVisualizer::Ptr m_cadViewer;
     pcl::visualization::PCLVisualizer::Ptr m_scanViewer;
@@ -90,7 +94,10 @@ private:
     void appendLog(const QString& message);
     void resetSeamSelection();
     void clearSeams();
+    void clearMappedSeamResults();
     void createSelectedSeam();
+    const WeldSeamData* selectedSeam() const;
+    void updateMapSeamButtonState();
 
     void mouseEventOccurred(
         const pcl::visualization::MouseEvent& event, void* args);

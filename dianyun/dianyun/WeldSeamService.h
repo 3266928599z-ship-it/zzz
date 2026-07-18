@@ -14,4 +14,10 @@ public:
         int seamIndex,
         WeldSeamData& output,
         QString& errorMessage) const;
+
+    bool mapSeam(
+        const WeldSeamData& cadSeam,
+        const Eigen::Matrix4f& cadToScan,
+        WeldSeamData& output,
+        QString& errorMessage) const;
 };
