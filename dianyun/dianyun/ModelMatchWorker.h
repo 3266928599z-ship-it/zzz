@@ -43,8 +43,6 @@ public:
     // 接收主线程传来的数据
     void setInput(CloudRGB::Ptr cadCloud,
         CloudRGB::Ptr scanCloud,
-        std::vector<CloudRGB::Ptr> seamPointsList,
-        std::vector<QString> seamNames,
         const MatchConfig& cfg);
 
 public slots:
@@ -66,17 +64,10 @@ private:
         PointCloudNT::Ptr sourceCloud,
         double& fitnessOut);
 
-    std::vector<float> buildSeamWeights(PointCloudNT::Ptr cadDs);
-
     Eigen::Matrix4f fineRegistrationB(const Eigen::Matrix4f& T_A,
-        const std::vector<float>& weights,
-        double fitnessA,
         int& iterOut,
         bool& convergedOut,
-        float& finalWeightOut,
         double& fitnessOut);
-
-    std::vector<SeamMatchResult> projectSeams(const Eigen::Matrix4f& T_final);
 
     MatchVerdict classifyResult(const MatchResult& r) const;
 
@@ -108,8 +99,6 @@ private:
 private:
     CloudRGB::Ptr m_cadCloud;
     CloudRGB::Ptr m_scanCloud;
-    std::vector<CloudRGB::Ptr> m_seamPoints;
-    std::vector<QString> m_seamNames;
     MatchConfig m_cfg;
 
     float m_leafSize = 1.0f;

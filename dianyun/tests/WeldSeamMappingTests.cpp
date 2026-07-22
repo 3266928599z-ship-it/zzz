@@ -1,9 +1,12 @@
 #include "../dianyun/WeldSeamService.h"
+#include "../dianyun/MatchRequestTracker.h"
+#include "../dianyun/CameraCaptureState.h"
 
 #include <Eigen/Geometry>
 
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -29,6 +32,36 @@ int fail(const char* message)
 
 int main()
 {
+    CameraCaptureState captureState;
+    if (!captureState.tryBegin() || captureState.tryBegin()) {
+        return fail("camera capture state allowed overlapping captures");
+    }
+    captureState.finish();
+    if (captureState.isActive() || !captureState.tryBegin()) {
+        return fail("camera capture state did not reset after completion");
+    }
+    captureState.finish();
+
+    MatchRequestTracker requests;
+    const std::uint64_t firstRequest = requests.beginRequest();
+    if (firstRequest == 0 || !requests.accepts(firstRequest)) {
+        return fail("current match request was not accepted");
+    }
+    requests.complete(firstRequest);
+    if (requests.accepts(firstRequest)) {
+        return fail("completed match request was still accepted");
+    }
+
+    const std::uint64_t staleRequest = requests.beginRequest();
+    requests.invalidateData();
+    if (requests.accepts(staleRequest)) {
+        return fail("request created for old input data was accepted");
+    }
+    const std::uint64_t currentRequest = requests.beginRequest();
+    if (currentRequest <= staleRequest || !requests.accepts(currentRequest)) {
+        return fail("request ids were not monotonic after data replacement");
+    }
+
     WeldSeamData source;
     source.id = "7";
     source.name = QStringLiteral("seam-7");
@@ -78,6 +111,30 @@ int main()
     invalid(3, 0) = 1.0f;
     if (service.mapSeam(source, invalid, mapped, errorMessage)) {
         return fail("non-homogeneous transform was accepted");
+    }
+
+    invalid = transform;
+    invalid.block<3, 1>(0, 0) *= -1.0f;
+    if (service.mapSeam(source, invalid, mapped, errorMessage)) {
+        return fail("reflection transform was accepted");
+    }
+
+    invalid = transform;
+    invalid.block<3, 3>(0, 0) *= 2.0f;
+    if (service.mapSeam(source, invalid, mapped, errorMessage)) {
+        return fail("scaled transform was accepted");
+    }
+
+    WeldSeamData empty;
+    if (service.mapSeam(empty, transform, mapped, errorMessage)) {
+        return fail("empty seam was accepted");
+    }
+
+    WeldSeamData nonFinite = source;
+    nonFinite.points = CloudRGB::Ptr(new CloudRGB(*source.points));
+    nonFinite.points->front().x = std::numeric_limits<float>::quiet_NaN();
+    if (service.mapSeam(nonFinite, transform, mapped, errorMessage)) {
+        return fail("non-finite seam point was accepted");
     }
 
     std::cout << "WeldSeamMappingTests passed" << std::endl;

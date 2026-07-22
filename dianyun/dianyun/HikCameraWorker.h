@@ -1,7 +1,9 @@
 ﻿#pragma once
+#include "CameraCaptureState.h"
+
 #include <QObject>
-#include <QDebug>
-#include <atomic>
+#include <QMutex>
+#include <QString>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include "MvCameraControl.h"
@@ -26,6 +28,8 @@ public:
 
     bool openCamera();
     void closeCamera();
+    bool isCapturing() const;
+    QString lastError() const;
 
     // 将参数暴露为公有，方便主界面动态修改
     ScanParams m_params;
@@ -33,12 +37,18 @@ public:
 signals:
     void pointCloudReady(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud);
     void captureFinished();
+    void captureFailed(QString errorMessage);
 
 private:
     void* m_hCamera;
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr m_accumulatedCloud;
     int m_frameCount;
-    std::atomic<bool> m_isScanning;
+    CameraCaptureState m_captureState;
+    bool m_deviceOpened = false;
+    bool m_streamStarted = false;
+    mutable QMutex m_cloudMutex;
+    QString m_lastError;
 
+    void releaseCameraHandle();
     static void __stdcall ImageCallBackEx(unsigned char* pData, MV_FRAME_OUT_INFO_EX* pFrameInfo, void* pUser);
 };

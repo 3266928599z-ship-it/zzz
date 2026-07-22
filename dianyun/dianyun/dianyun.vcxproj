@@ -134,6 +134,7 @@
     <ClCompile Include="StepModelLoader.cpp" />
     <ClCompile Include="VisualizationManager.cpp" />
     <ClCompile Include="WeldSeamService.cpp" />
+    <ClCompile Include="WeldSeamMapping.cpp" />
     <QtRcc Include="dianyun.qrc" />
     <QtUic Include="dianyun.ui" />
     <QtMoc Include="dianyun.h" />
@@ -151,7 +152,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AppTypes.h" />
+    <ClInclude Include="CameraCaptureState.h" />
     <ClInclude Include="MatchTypes.h" />
+    <ClInclude Include="MatchRequestTracker.h" />
     <ClInclude Include="PointCloudLoader.h" />
     <ClInclude Include="StepModelLoader.h" />
     <ClInclude Include="VisualizationManager.h" />

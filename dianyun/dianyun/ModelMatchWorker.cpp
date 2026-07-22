@@ -26,6 +26,25 @@
 #include <cmath>
 #include <limits>
 
+namespace {
+
+constexpr std::size_t kMinimumProcessedPointCount = 100;
+
+bool isProperRigidTransform(const Eigen::Matrix4f& transform)
+{
+    if (!transform.allFinite()) return false;
+    const Eigen::Vector4f bottomRow(0.0f, 0.0f, 0.0f, 1.0f);
+    if (!transform.row(3).transpose().isApprox(bottomRow, 1e-4f)) {
+        return false;
+    }
+    const Eigen::Matrix3f rotation = transform.block<3, 3>(0, 0);
+    return (rotation.transpose() * rotation)
+        .isApprox(Eigen::Matrix3f::Identity(), 5e-3f) &&
+        std::abs(rotation.determinant() - 1.0f) <= 5e-3f;
+}
+
+}
+
 ModelMatchWorker::ModelMatchWorker(QObject* parent) : QObject(parent)
 {
     m_cadDs.reset(new PointCloudNT());
@@ -35,14 +54,10 @@ ModelMatchWorker::ModelMatchWorker(QObject* parent) : QObject(parent)
 ModelMatchWorker::~ModelMatchWorker() {}
 
 void ModelMatchWorker::setInput(CloudRGB::Ptr cadCloud, CloudRGB::Ptr scanCloud,
-    std::vector<CloudRGB::Ptr> seamPointsList,
-    std::vector<QString> seamNames,
     const MatchConfig& cfg)
 {
     m_cadCloud = cadCloud;
     m_scanCloud = scanCloud;
-    m_seamPoints = seamPointsList;
-    m_seamNames = seamNames;
     m_cfg = cfg;
 }
 
@@ -61,6 +76,18 @@ void ModelMatchWorker::run()
 
         emit progress(QString::fromUtf8("预处理阶段 (降采样与特征提取)..."));
         preprocess();
+
+        if (!std::isfinite(m_leafSize) || m_leafSize <= 0.0f ||
+            !m_cadDs || m_cadDs->size() < kMinimumProcessedPointCount ||
+            !m_scanDs || m_scanDs->size() < kMinimumProcessedPointCount) {
+            result.errorMessage = QString::fromUtf8(
+                "预处理后有效点数不足（CAD %1 点，扫描 %2 点，至少各需 %3 点）。")
+                .arg(m_cadDs ? m_cadDs->size() : 0)
+                .arg(m_scanDs ? m_scanDs->size() : 0)
+                .arg(kMinimumProcessedPointCount);
+            emit finished(result);
+            return;
+        }
 
         if (m_scanToCadSizeRatio > 1.08f) {
             emit progress(QString::fromUtf8(
@@ -203,14 +230,13 @@ void ModelMatchWorker::run()
         }
 
         emit progress(QString::fromUtf8("精配准阶段B (鲁棒点到面迭代)..."));
-        std::vector<float> weights(m_cadDs->size(), 1.0f);
         int iters = 0;
         bool conv = false;
-        float finalW = m_cfg.seamWeightMax;
         double fitnessB = 0;
 
         // 内部始终求解“扫描 -> CAD”，最终取逆得到 CAD -> 扫描。
-        Eigen::Matrix4f scanToCad = fineRegistrationB(T_A, weights, fitnessA, iters, conv, finalW, fitnessB);
+        Eigen::Matrix4f scanToCad =
+            fineRegistrationB(T_A, iters, conv, fitnessB);
 
         float overlap = 0.0f;
         float reverseOverlap = 0.0f;
@@ -251,10 +277,14 @@ void ModelMatchWorker::run()
         result.p95Residual = p95;
         result.iterationsStageB = iters;
         result.convergedStageB = conv;
-        result.finalSeamWeight = finalW;
+        if (!isProperRigidTransform(scanToCad)) {
+            result.errorMessage = QString::fromUtf8(
+                "精配准生成了无效刚性变换，结果已拒绝。");
+            emit finished(result);
+            return;
+        }
         result.T_final = scanToCad.inverse();
         result.coarseCandidateReport = m_coarseCandidateReport;
-        result.seamResults.clear();
 
         result.success = true;
         result.verdict = classifyResult(result);
@@ -273,6 +303,11 @@ void ModelMatchWorker::run()
         result.success = false;
         result.errorMessage = QString::fromUtf8(e.what());
     }
+    catch (...) {
+        result.success = false;
+        result.errorMessage = QString::fromUtf8(
+            "模型匹配发生未知异常，结果已安全终止。");
+    }
 
     emit finished(result);
 }
@@ -282,6 +317,13 @@ void ModelMatchWorker::run()
 // ==========================================
 void ModelMatchWorker::extractEdgeFeatures(PointCloudNT::Ptr cloud, float leafSize, PointCloudNT::Ptr& outEdgeCloud, FeatureCloudT::Ptr& outFeatures)
 {
+    outEdgeCloud.reset(new PointCloudNT());
+    outFeatures.reset(new FeatureCloudT());
+    if (!cloud || cloud->size() < 3 || !std::isfinite(leafSize) ||
+        leafSize <= 0.0f) {
+        return;
+    }
+
     const float featureRadius = leafSize * 6.0f;
     pcl::PrincipalCurvaturesEstimation<PointNT, PointNT, pcl::PrincipalCurvatures> estimator;
     estimator.setInputCloud(cloud);
@@ -496,6 +538,11 @@ void ModelMatchWorker::preprocess()
             }
         }
 
+        if (!ds || ds->size() < 3) {
+            output.reset(new PointCloudNT());
+            return;
+        }
+
         // 3. 在轻量级点云上计算法向 (OpenMP 多核全开)
         output.reset(new PointCloudNT());
         pcl::NormalEstimationOMP<pcl::PointXYZ, PointNT> ne;
@@ -658,6 +705,13 @@ float ModelMatchWorker::evaluateSpatialCoverageForCloud(
 bool ModelMatchWorker::coarseRegistration(std::vector<Eigen::Matrix4f>& transforms,
     std::vector<double>& fitnesses)
 {
+    transforms.clear();
+    fitnesses.clear();
+    if (!m_cadDs || m_cadDs->size() < kMinimumProcessedPointCount ||
+        !m_scanDs || m_scanDs->size() < kMinimumProcessedPointCount) {
+        return false;
+    }
+
     struct Candidate {
         Eigen::Matrix4f T;
         float score;
@@ -920,8 +974,6 @@ bool ModelMatchWorker::coarseRegistration(std::vector<Eigen::Matrix4f>& transfor
             .arg(candidate.normalConsistency * 100.0f, 0, 'f', 1);
     }
 
-    transforms.clear();
-    fitnesses.clear();
     for (const auto& candidate : distinctCandidates) {
         transforms.push_back(candidate.T);
         fitnesses.push_back(candidate.score);
@@ -998,45 +1050,13 @@ Eigen::Matrix4f ModelMatchWorker::fineRegistrationA(const Eigen::Matrix4f& initT
 }
 
 // ==========================================
-// 辅助函数：构建焊缝引力场
+// 阶段 2B：自定义鲁棒点到面 ICP
 // ==========================================
-std::vector<float> ModelMatchWorker::buildSeamWeights(PointCloudNT::Ptr cadDs)
-{
-    std::vector<float> weights(cadDs->size(), 1.0f);
-    pcl::PointCloud<pcl::PointXYZ>::Ptr allSeams(new pcl::PointCloud<pcl::PointXYZ>());
-
-    for (auto& cloudRGB : m_seamPoints) {
-        if (!cloudRGB) continue;
-        for (const auto& pt : cloudRGB->points) {
-            allSeams->push_back(pcl::PointXYZ(pt.x, pt.y, pt.z));
-        }
-    }
-
-    if (allSeams->empty()) return weights;
-
-    pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
-    kdtree.setInputCloud(allSeams);
-
-    float sigma = m_leafSize * m_cfg.seamSigmaFactor;
-    std::vector<int> idx(1);
-    std::vector<float> dist_sqr(1);
-
-    for (size_t i = 0; i < cadDs->size(); ++i) {
-        pcl::PointXYZ q(cadDs->points[i].x, cadDs->points[i].y, cadDs->points[i].z);
-        if (kdtree.nearestKSearch(q, 1, idx, dist_sqr) > 0) {
-            float d2 = dist_sqr[0];
-            weights[i] = 1.0f + (m_cfg.seamWeightMax - 1.0f) * std::exp(-d2 / (2.0f * sigma * sigma));
-        }
-    }
-    return weights;
-}
-
-// ==========================================
-// 阶段 2B：自定义加权点到面 ICP
-// ==========================================
-Eigen::Matrix4f ModelMatchWorker::fineRegistrationB(const Eigen::Matrix4f& T_A, const std::vector<float>& weights,
-    double fitnessA, int& iterOut, bool& convergedOut,
-    float& finalWeightOut, double& fitnessOut)
+Eigen::Matrix4f ModelMatchWorker::fineRegistrationB(
+    const Eigen::Matrix4f& T_A,
+    int& iterOut,
+    bool& convergedOut,
+    double& fitnessOut)
 {
     Eigen::Matrix4f T_B = Eigen::Matrix4f::Identity();
     PointCloudNT::Ptr scanAligned(new PointCloudNT());
@@ -1046,8 +1066,9 @@ Eigen::Matrix4f ModelMatchWorker::fineRegistrationB(const Eigen::Matrix4f& T_A, 
     kdtreeTarget.setInputCloud(m_cadDs);
 
     convergedOut = false;
-    float currentWMax = m_cfg.seamWeightMax;
-    float maxAngleStep = 0.05f;
+    fitnessOut = std::numeric_limits<double>::infinity();
+    const float maxAngleStep = 0.05f;
+    const float maxTranslationStep = std::max(m_leafSize, 1e-3f);
 
     for (iterOut = 0; iterOut < m_cfg.icpMaxIterB; ++iterOut) {
         Eigen::Matrix<float, 6, 6> ATA = Eigen::Matrix<float, 6, 6>::Zero();
@@ -1094,10 +1115,25 @@ Eigen::Matrix4f ModelMatchWorker::fineRegistrationB(const Eigen::Matrix4f& T_A, 
         if (validPairs < 10) break;
         fitnessOut = currentTotalError / validPairs;
 
-        Eigen::Matrix<float, 6, 1> x = ATA.ldlt().solve(ATb);
+        const float maximumDiagonal = ATA.diagonal().cwiseAbs().maxCoeff();
+        if (!std::isfinite(maximumDiagonal) || maximumDiagonal <= 1e-8f) break;
+
+        // Partial scans are often close to planar. A small diagonal damping term
+        // keeps the point-to-plane solve stable without rejecting useful data.
+        ATA.diagonal().array() += std::max(maximumDiagonal * 1e-6f, 1e-8f);
+        Eigen::LDLT<Eigen::Matrix<float, 6, 6>> decomposition(ATA);
+        if (decomposition.info() != Eigen::Success) break;
+
+        Eigen::Matrix<float, 6, 1> x = decomposition.solve(ATb);
         if (!x.allFinite()) break;
         float angle = x.head<3>().norm();
-        if (angle > maxAngleStep) x *= (maxAngleStep / angle);
+        if (angle > maxAngleStep) {
+            x.head<3>() *= maxAngleStep / angle;
+        }
+        const float translation = x.tail<3>().norm();
+        if (translation > maxTranslationStep) {
+            x.tail<3>() *= maxTranslationStep / translation;
+        }
 
         Eigen::Matrix4f dT = Eigen::Matrix4f::Identity();
         if (angle > 1e-6) dT.block<3, 3>(0, 0) = Eigen::AngleAxisf(x.head<3>().norm(), x.head<3>().normalized()).toRotationMatrix();
@@ -1112,7 +1148,6 @@ Eigen::Matrix4f ModelMatchWorker::fineRegistrationB(const Eigen::Matrix4f& T_A, 
         }
     }
 
-    finalWeightOut = currentWMax;
     return T_B * T_A;
 }
 
@@ -1176,68 +1211,6 @@ void ModelMatchWorker::evaluateAlignmentForCloud(const Eigen::Matrix4f& scanToCa
     const size_t p95Index = std::min(residuals.size() - 1,
         static_cast<size_t>(std::floor((residuals.size() - 1) * 0.95f)));
     p95Residual = residuals[p95Index];
-}
-
-// ==========================================
-// 焊缝投影与评估
-// ==========================================
-std::vector<SeamMatchResult> ModelMatchWorker::projectSeams(const Eigen::Matrix4f& T_final)
-{
-    std::vector<SeamMatchResult> results;
-    pcl::KdTreeFLANN<pcl::PointXYZRGB> kdtreeScan;
-    if (!m_scanCloud->empty()) kdtreeScan.setInputCloud(m_scanCloud);
-
-    float confThreshSqr = (m_leafSize * m_cfg.confThreshFactor) * (m_leafSize * m_cfg.confThreshFactor);
-
-    for (size_t si = 0; si < m_seamPoints.size(); ++si) {
-        SeamMatchResult sr;
-        sr.seamId = si;
-        sr.seamName = m_seamNames[si];
-        sr.meanResidual = 0;
-        sr.maxResidual = 0;
-        int validPts = 0;
-
-        auto seamCloud = m_seamPoints[si];
-        if (!seamCloud || seamCloud->empty() || m_scanCloud->empty()) {
-            sr.confidence = SeamConfidence::Low;
-            results.push_back(sr);
-            continue;
-        }
-
-        CloudRGB::Ptr transSeam(new CloudRGB());
-        pcl::transformPointCloud(*seamCloud, *transSeam, T_final);
-
-        for (const auto& pt : transSeam->points) {
-            std::vector<int> idx(1);
-            std::vector<float> dist_sqr(1);
-            WeldPathPoint wp;
-            wp.normal = Eigen::Vector3f(0, 0, 1); // 简化处理，真实法向应由CAD推导
-
-            if (kdtreeScan.nearestKSearch(pt, 1, idx, dist_sqr) > 0 && dist_sqr[0] < confThreshSqr) {
-                wp.position = m_scanCloud->points[idx[0]].getVector3fMap();
-                wp.fromScan = true;
-                validPts++;
-                float dist = std::sqrt(dist_sqr[0]);
-                sr.meanResidual += dist;
-                if (dist > sr.maxResidual) sr.maxResidual = dist;
-            }
-            else {
-                wp.position = pt.getVector3fMap();
-                wp.fromScan = false;
-            }
-            sr.pathPoints.push_back(wp);
-        }
-
-        sr.coverageRatio = (float)validPts / transSeam->size();
-        if (validPts > 0) sr.meanResidual /= validPts;
-
-        if (sr.coverageRatio < 0.5f) sr.confidence = SeamConfidence::Low;
-        else if (sr.meanResidual > (m_leafSize * m_cfg.confThreshFactor) * 0.7f) sr.confidence = SeamConfidence::Medium;
-        else sr.confidence = SeamConfidence::High;
-
-        results.push_back(sr);
-    }
-    return results;
 }
 
 MatchVerdict ModelMatchWorker::classifyResult(const MatchResult& r) const

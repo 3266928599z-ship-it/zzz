@@ -8,6 +8,7 @@
 #include "AppTypes.h"
 #include "HikCameraWorker.h"
 #include "MatchTypes.h"
+#include "MatchRequestTracker.h"
 #include "ModelMatchController.h"
 #include "PointCloudLoadController.h"
 #include "StepModelLoader.h"
@@ -48,9 +49,9 @@ private slots:
     void onPointCloudLoadBusyChanged(bool busy);
 
     void on_btnOpen_3_clicked();
-    void onMatchProgress(QString stage);
-    void onProcessedScanReady(CloudRGB::Ptr processedCloud);
-    void onMatchFinished(MatchResult result);
+    void onMatchProgress(quint64 requestId, QString stage);
+    void onProcessedScanReady(quint64 requestId, CloudRGB::Ptr processedCloud);
+    void onMatchFinished(quint64 requestId, MatchResult result);
 
     void on_btnNewSeam_clicked();
     void on_btnMapSeam_clicked();
@@ -75,6 +76,7 @@ private:
     CadModelData m_cadModel;
     CloudRGB::Ptr m_scanCloud = CloudRGB::Ptr(new CloudRGB());
     MatchResult m_lastMatchResult;
+    MatchRequestTracker m_matchRequests;
     std::vector<WeldSeamData> m_seams;
     std::unordered_map<std::string, WeldSeamData> m_mappedSeams;
 
@@ -97,7 +99,8 @@ private:
     void clearMappedSeamResults();
     void createSelectedSeam();
     const WeldSeamData* selectedSeam() const;
-    void updateMapSeamButtonState();
+    void invalidateMatchResult();
+    void updateActionStates();
 
     void mouseEventOccurred(
         const pcl::visualization::MouseEvent& event, void* args);

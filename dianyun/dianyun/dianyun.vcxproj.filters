@@ -52,6 +52,7 @@
     <ClCompile Include="StepModelLoader.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="VisualizationManager.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="WeldSeamService.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="WeldSeamMapping.cpp"><Filter>Source Files</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="HikCameraWorker.h">
@@ -65,7 +66,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AppTypes.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="CameraCaptureState.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="MatchTypes.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="MatchRequestTracker.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="PointCloudLoader.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="StepModelLoader.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="VisualizationManager.h"><Filter>Header Files</Filter></ClInclude>

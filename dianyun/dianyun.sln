@@ -5,6 +5,8 @@ VisualStudioVersion = 17.14.36511.14 d17.14
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "dianyun", "dianyun\dianyun.vcxproj", "{A35F7A6A-4C3D-4BC9-8DC0-7F343C3CDBE0}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "dianyun.tests", "tests\dianyun.tests.vcxproj", "{C683B731-628D-4BA6-99A8-E844739EAB9B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -15,6 +17,10 @@ Global
 		{A35F7A6A-4C3D-4BC9-8DC0-7F343C3CDBE0}.Debug|x64.Build.0 = Debug|x64
 		{A35F7A6A-4C3D-4BC9-8DC0-7F343C3CDBE0}.Release|x64.ActiveCfg = Release|x64
 		{A35F7A6A-4C3D-4BC9-8DC0-7F343C3CDBE0}.Release|x64.Build.0 = Release|x64
+		{C683B731-628D-4BA6-99A8-E844739EAB9B}.Debug|x64.ActiveCfg = Debug|x64
+		{C683B731-628D-4BA6-99A8-E844739EAB9B}.Debug|x64.Build.0 = Debug|x64
+		{C683B731-628D-4BA6-99A8-E844739EAB9B}.Release|x64.ActiveCfg = Release|x64
+		{C683B731-628D-4BA6-99A8-E844739EAB9B}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

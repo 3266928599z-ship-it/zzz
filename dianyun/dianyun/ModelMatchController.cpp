@@ -2,6 +2,8 @@
 
 #include "ModelMatchWorker.h"
 
+#include <utility>
+
 ModelMatchController::ModelMatchController(QObject* parent)
     : QObject(parent),
       m_thread(new QThread(this)),
@@ -10,11 +12,17 @@ ModelMatchController::ModelMatchController(QObject* parent)
     m_worker->moveToThread(m_thread);
     connect(m_thread, &QThread::started, m_worker, &ModelMatchWorker::run);
     connect(m_worker, &ModelMatchWorker::progress,
-        this, &ModelMatchController::progress);
+        this, [this](QString stage) {
+            emit progress(m_requestId, std::move(stage));
+        });
     connect(m_worker, &ModelMatchWorker::processedScanReady,
-        this, &ModelMatchController::processedScanReady);
+        this, [this](CloudRGB::Ptr cloud) {
+            emit processedScanReady(m_requestId, std::move(cloud));
+        });
     connect(m_worker, &ModelMatchWorker::finished,
-        this, &ModelMatchController::finished);
+        this, [this](MatchResult result) {
+            emit finished(m_requestId, std::move(result));
+        });
     connect(m_worker, &ModelMatchWorker::finished,
         m_thread, &QThread::quit);
     connect(m_thread, &QThread::started, this, [this]() {
@@ -40,12 +48,12 @@ bool ModelMatchController::isRunning() const
 }
 
 bool ModelMatchController::start(
+    quint64 requestId,
     const CloudRGB::Ptr& cadCloud,
     const CloudRGB::Ptr& scanCloud,
-    const std::vector<WeldSeamData>& seams,
     const MatchConfig& config)
 {
-    if (isRunning() || !cadCloud || cadCloud->empty() ||
+    if (requestId == 0 || isRunning() || !cadCloud || cadCloud->empty() ||
         !scanCloud || scanCloud->empty()) {
         return false;
     }
@@ -54,17 +62,8 @@ bool ModelMatchController::start(
     // 因此匹配线程可以安全共享只读点云，避免在主线程复制数百万点。
     CloudRGB::Ptr cadCopy = cadCloud;
     CloudRGB::Ptr scanCopy = scanCloud;
-    std::vector<CloudRGB::Ptr> seamPoints;
-    std::vector<QString> seamNames;
-    seamPoints.reserve(seams.size());
-    seamNames.reserve(seams.size());
-    for (const auto& seam : seams) {
-        if (!seam.points) continue;
-        seamPoints.push_back(CloudRGB::Ptr(new CloudRGB(*seam.points)));
-        seamNames.push_back(seam.name);
-    }
-
-    m_worker->setInput(cadCopy, scanCopy, seamPoints, seamNames, config);
+    m_requestId = requestId;
+    m_worker->setInput(cadCopy, scanCopy, config);
     m_thread->start();
     return true;
 }

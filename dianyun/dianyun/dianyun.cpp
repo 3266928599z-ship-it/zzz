@@ -56,7 +56,7 @@ dianyun::dianyun(QWidget* parent)
     connect(m_matchController, &ModelMatchController::finished,
         this, &dianyun::onMatchFinished);
     connect(m_matchController, &ModelMatchController::busyChanged,
-        this, [this](bool) { updateMapSeamButtonState(); });
+        this, [this](bool) { updateActionStates(); });
 
     m_pointCloudLoadController = new PointCloudLoadController(this);
     connect(m_pointCloudLoadController, &PointCloudLoadController::progress,
@@ -69,7 +69,7 @@ dianyun::dianyun(QWidget* parent)
         this, &dianyun::onPointCloudLoadBusyChanged);
 
     updateStatusUI();
-    updateMapSeamButtonState();
+    updateActionStates();
     if (ui->groupBoxLog) {
         ui->groupBoxLog->setTitle(QString::fromUtf8("操作日志"));
     }
@@ -174,14 +174,14 @@ void dianyun::clearSeams()
     m_seamCounter = 0;
     if (ui->listWeldSeams) ui->listWeldSeams->clear();
     resetSeamSelection();
-    updateMapSeamButtonState();
+    updateActionStates();
 }
 
 void dianyun::clearMappedSeamResults()
 {
     m_visualization.clearMappedSeams();
     m_mappedSeams.clear();
-    updateMapSeamButtonState();
+    updateActionStates();
 }
 
 const WeldSeamData* dianyun::selectedSeam() const
@@ -200,17 +200,40 @@ const WeldSeamData* dianyun::selectedSeam() const
     return seam == m_seams.cend() ? nullptr : &(*seam);
 }
 
-void dianyun::updateMapSeamButtonState()
+void dianyun::invalidateMatchResult()
 {
-    if (!ui || !ui->btnMapSeam) return;
+    m_matchRequests.invalidateData();
+    m_lastMatchResult = MatchResult();
+    clearMappedSeamResults();
+}
+
+void dianyun::updateActionStates()
+{
+    if (!ui) return;
     const bool matchRunning = m_matchController &&
         m_matchController->isRunning();
     const bool cloudLoading = m_pointCloudLoadController &&
         m_pointCloudLoadController->isRunning();
-    ui->btnMapSeam->setEnabled(
-        selectedSeam() && m_lastMatchResult.success &&
-        m_lastMatchResult.verdict == MatchVerdict::Pass &&
-        !matchRunning && !cloudLoading);
+    const bool cameraCapturing = m_cameraWorker &&
+        m_cameraWorker->isCapturing();
+    const bool dataActionsEnabled =
+        !matchRunning && !cloudLoading && !cameraCapturing;
+
+    if (ui->btnOpen) ui->btnOpen->setEnabled(dataActionsEnabled);
+    if (ui->btnOpen_2) ui->btnOpen_2->setEnabled(dataActionsEnabled);
+    if (ui->btnOpenCamera) {
+        ui->btnOpenCamera->setEnabled(dataActionsEnabled);
+    }
+    if (ui->btnOpen_3) {
+        ui->btnOpen_3->setEnabled(dataActionsEnabled &&
+            !m_reportProgressiveRender && m_cadModel.isValid() &&
+            m_scanCloud && !m_scanCloud->empty());
+    }
+    if (ui->btnMapSeam) {
+        ui->btnMapSeam->setEnabled(dataActionsEnabled &&
+            selectedSeam() && m_lastMatchResult.success &&
+            m_lastMatchResult.verdict == MatchVerdict::Pass);
+    }
 }
 
 void dianyun::mouseEventOccurred(
@@ -323,8 +346,7 @@ void dianyun::on_btnOpen_clicked()
 
     clearSeams();
     m_cadModel = std::move(loadedModel);
-    m_lastMatchResult = MatchResult();
-    updateMapSeamButtonState();
+    invalidateMatchResult();
     m_visualization.showCadModel(m_cadModel);
     appendLog(QString::fromUtf8("三维模型导入成功，CAD采样点数：") +
         QString::number(m_cadModel.sampleCloud->size()));
@@ -357,13 +379,11 @@ void dianyun::onPointCloudLoadFinished(CloudRGB::Ptr loadedCloud, double diagona
     }
 
     m_scanCloud = std::move(loadedCloud);
-    clearMappedSeamResults();
-    m_lastMatchResult = MatchResult();
-    updateMapSeamButtonState();
+    invalidateMatchResult();
     m_visualization.showScanCloud(m_scanCloud, diagonal);
     m_reportProgressiveRender = true;
     m_lastRenderPercent = -1;
-    if (ui->btnOpen_3) ui->btnOpen_3->setEnabled(false);
+    updateActionStates();
     appendLog(QString::fromUtf8(
         "完整点云后台加载成功，共 %1 点，正在分批显示全部点云...")
         .arg(m_scanCloud->size()));
@@ -382,16 +402,10 @@ void dianyun::onPointCloudLoadFailed(QString errorMessage)
 
 void dianyun::onPointCloudLoadBusyChanged(bool busy)
 {
-    if (ui->btnOpen_2) ui->btnOpen_2->setEnabled(!busy);
-    if (ui->btnOpen_3) {
-        ui->btnOpen_3->setEnabled(!busy &&
-            !m_reportProgressiveRender && m_matchController &&
-            !m_matchController->isRunning());
-    }
     if (busy && ui->lblStatus) {
         ui->lblStatus->setText(QString::fromUtf8("当前状态：正在后台加载点云"));
     }
-    updateMapSeamButtonState();
+    updateActionStates();
 }
 
 void dianyun::on_btnNewSeam_clicked()
@@ -419,14 +433,14 @@ void dianyun::on_btnMapSeam_clicked()
     const WeldSeamData* seam = selectedSeam();
     if (!seam) {
         appendLog(QString::fromUtf8("请先在焊缝列表中选择一条焊缝。"));
-        updateMapSeamButtonState();
+        updateActionStates();
         return;
     }
     if (!m_lastMatchResult.success ||
         m_lastMatchResult.verdict != MatchVerdict::Pass) {
         appendLog(QString::fromUtf8(
             "最新模型匹配尚未通过，不能进行焊缝映射。"));
-        updateMapSeamButtonState();
+        updateActionStates();
         return;
     }
 
@@ -468,7 +482,7 @@ void dianyun::on_btnDeleteSeam_clicked()
     if (seam != m_seams.end()) m_seams.erase(seam);
     delete ui->listWeldSeams->takeItem(row);
     appendLog(QString::fromUtf8("已删除焊缝：") + name);
-    updateMapSeamButtonState();
+    updateActionStates();
 }
 
 void dianyun::on_listWeldSeams_currentItemChanged(
@@ -481,7 +495,7 @@ void dianyun::on_listWeldSeams_currentItemChanged(
     else {
         m_visualization.clearSeamSelection();
     }
-    updateMapSeamButtonState();
+    updateActionStates();
 }
 
 void dianyun::updatePCLWindow()
@@ -505,11 +519,7 @@ void dianyun::updatePCLWindow()
         if (ui->lblStatus) {
             ui->lblStatus->setText(QString::fromUtf8("当前状态：点云就绪"));
         }
-        if (ui->btnOpen_3 && m_matchController &&
-            !m_matchController->isRunning() && m_pointCloudLoadController &&
-            !m_pointCloudLoadController->isRunning()) {
-            ui->btnOpen_3->setEnabled(true);
-        }
+        updateActionStates();
     }
 }
 
@@ -524,6 +534,12 @@ void dianyun::on_btnOpenCamera_clicked()
         m_cameraWorker = new HikCameraWorker(this);
         connect(m_cameraWorker, &HikCameraWorker::pointCloudReady,
             this, &dianyun::onCameraPointCloudReady);
+        connect(m_cameraWorker, &HikCameraWorker::captureFinished,
+            this, [this]() { updateActionStates(); });
+        connect(m_cameraWorker, &HikCameraWorker::captureFailed,
+            this, [this](const QString& message) {
+                appendLog(QString::fromUtf8("相机采集失败：") + message);
+            });
     }
 
     appendLog(QString::fromUtf8("正在尝试独占连接3D相机..."));
@@ -531,22 +547,21 @@ void dianyun::on_btnOpenCamera_clicked()
         appendLog(QString::fromUtf8("相机连接成功，正在采集并拼装三维点云。"));
     }
     else {
-        appendLog(QString::fromUtf8(
-            "相机打开失败，请检查连接并关闭占用相机的海康软件。"));
+        appendLog(QString::fromUtf8("相机启动失败：") +
+            m_cameraWorker->lastError());
     }
+    updateActionStates();
 }
 
 void dianyun::onCameraPointCloudReady(CloudRGB::Ptr newCloud)
 {
     if (!newCloud || newCloud->empty()) return;
-    clearMappedSeamResults();
-    m_lastMatchResult = MatchResult();
-    updateMapSeamButtonState();
     m_scanCloud = std::move(newCloud);
+    invalidateMatchResult();
     m_visualization.showScanCloud(m_scanCloud);
     m_reportProgressiveRender = true;
     m_lastRenderPercent = -1;
-    if (ui->btnOpen_3) ui->btnOpen_3->setEnabled(false);
+    updateActionStates();
     appendLog(QString::fromUtf8("实时拼接完成，正在分批显示，节点数：") +
         QString::number(m_scanCloud->size()));
 }
@@ -570,45 +585,51 @@ void dianyun::on_btnOpen_3_clicked()
         return;
     }
 
+    m_lastMatchResult = MatchResult();
+    clearMappedSeamResults();
+    const quint64 requestId = m_matchRequests.beginRequest();
     if (!m_matchController->start(
-        m_cadModel.sampleCloud, m_scanCloud, m_seams, MatchConfig())) {
+        requestId, m_cadModel.sampleCloud, m_scanCloud,
+        MatchConfig())) {
+        m_matchRequests.complete(requestId);
         appendLog(QString::fromUtf8("无法启动模型匹配。"));
+        updateActionStates();
         return;
     }
 
-    clearMappedSeamResults();
-    m_lastMatchResult = MatchResult();
-    updateMapSeamButtonState();
+    updateActionStates();
     appendLog(QString::fromUtf8(
         "模型匹配开始：全场景自动分割与CAD引导裁剪。"));
-    if (ui->btnOpen_3) ui->btnOpen_3->setEnabled(false);
     if (ui->lblStatus) {
         ui->lblStatus->setText(QString::fromUtf8("当前状态：匹配中"));
     }
 }
 
-void dianyun::onMatchProgress(QString stage)
+void dianyun::onMatchProgress(quint64 requestId, QString stage)
 {
+    if (!m_matchRequests.accepts(requestId)) return;
     if (ui->lblStatus) {
         ui->lblStatus->setText(QString::fromUtf8("当前状态：") + stage);
     }
 }
 
-void dianyun::onProcessedScanReady(CloudRGB::Ptr processedCloud)
+void dianyun::onProcessedScanReady(
+    quint64 requestId, CloudRGB::Ptr processedCloud)
 {
+    if (!m_matchRequests.accepts(requestId)) return;
     if (!processedCloud || processedCloud->empty()) return;
     m_visualization.showProcessedScan(processedCloud);
 }
 
-void dianyun::onMatchFinished(MatchResult result)
+void dianyun::onMatchFinished(quint64 requestId, MatchResult result)
 {
-    m_lastMatchResult = result;
-    updateMapSeamButtonState();
-    if (ui->btnOpen_3) {
-        ui->btnOpen_3->setEnabled(!m_reportProgressiveRender &&
-            m_pointCloudLoadController &&
-            !m_pointCloudLoadController->isRunning());
+    if (!m_matchRequests.accepts(requestId)) {
+        appendLog(QString::fromUtf8("已忽略过期的模型匹配结果。"));
+        return;
     }
+    m_matchRequests.complete(requestId);
+    m_lastMatchResult = result;
+    updateActionStates();
 
     if (!result.success) {
         if (ui->lblStatus) {
