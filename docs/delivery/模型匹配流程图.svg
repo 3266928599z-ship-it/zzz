@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">模型匹配关键技术与流程图</title>
+  <desc id="desc">左侧为关键技术，右侧为完整模型匹配流程。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#273142"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#5a6472" flood-opacity="0.18"/>
+    </filter>
+    <style>
+      .title { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif; font-size: 48px; font-weight: 700; fill: #083fa3; }
+      .subtitle { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif; font-size: 29px; font-weight: 700; fill: #3c4555; }
+      .section { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif; font-size: 26px; font-weight: 700; fill: #ffffff; }
+      .box-title { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif; font-size: 22px; font-weight: 700; fill: #1d3557; }
+      .box-text { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif; font-size: 18px; fill: #263342; }
+      .flow-text { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif; font-size: 19px; font-weight: 700; fill: #263342; text-anchor: middle; }
+      .small { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif; font-size: 16px; fill: #526173; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="#ffffff"/>
+  <rect x="20" y="18" width="1560" height="860" rx="2" fill="#ffffff" stroke="#c6cdd8" stroke-width="2"/>
+
+  <text x="80" y="95" class="title">模型匹配关键技术研究</text>
+  <rect x="24" y="112" width="1160" height="12" fill="#0b45a7"/>
+  <rect x="34" y="138" width="1515" height="52" fill="#e6e9ee"/>
+  <rect x="52" y="154" width="17" height="17" fill="#3f4652"/>
+  <text x="82" y="171" class="subtitle">面向残缺扫描点云的 CAD 模型全自动匹配与质量判定</text>
+
+  <rect x="46" y="222" width="600" height="618" rx="8" fill="#fbfdff" stroke="#7ca0de" stroke-width="2"/>
+  <rect x="92" y="245" width="510" height="62" rx="3" fill="#547fca" filter="url(#shadow)"/>
+  <text x="347" y="285" class="section" text-anchor="middle">关键技术</text>
+
+  <rect x="68" y="332" width="556" height="108" rx="4" fill="#ffffff" stroke="#7ca0de" stroke-width="2"/>
+  <text x="92" y="367" class="box-title">全场景自动工件提取</text>
+  <text x="92" y="397" class="box-text">体素降采样、最大平面剔除、离群点滤波与欧式聚类，</text>
+  <text x="92" y="423" class="box-text">自动分离工件主体，降低底板、夹具和飞点干扰。</text>
+
+  <rect x="68" y="460" width="556" height="108" rx="4" fill="#ffffff" stroke="#7ca0de" stroke-width="2"/>
+  <text x="92" y="495" class="box-title">多源全局粗配准</text>
+  <text x="92" y="525" class="box-text">融合 FPFH-SAC、PPF 与 PCA 三类姿态候选，</text>
+  <text x="92" y="551" class="box-text">避免单一算法因局部缺失、重复结构而陷入错误初值。</text>
+
+  <rect x="68" y="588" width="556" height="108" rx="4" fill="#ffffff" stroke="#7ca0de" stroke-width="2"/>
+  <text x="92" y="623" class="box-title">CAD 引导裁剪与两阶段 ICP</text>
+  <text x="92" y="653" class="box-text">依据候选姿态渐进裁剪无关点，再依次执行点到点 ICP</text>
+  <text x="92" y="679" class="box-text">和鲁棒点到面 ICP，实现稳定收敛与精细表面贴合。</text>
+
+  <rect x="68" y="716" width="556" height="98" rx="4" fill="#ffffff" stroke="#7ca0de" stroke-width="2"/>
+  <text x="92" y="751" class="box-title">多指标质量评价与结果判定</text>
+  <text x="92" y="781" class="box-text">联合覆盖率、特征、空间结构、法向、RMSE 和 P95，</text>
+  <text x="92" y="807" class="box-text">输出“通过、人工确认、失败”，并自动回退劣化结果。</text>
+
+  <rect x="710" y="245" width="790" height="62" rx="3" fill="#547fca" filter="url(#shadow)"/>
+  <text x="1105" y="285" class="section" text-anchor="middle">模型匹配流程</text>
+
+  <rect x="735" y="354" width="165" height="100" rx="12" fill="#f6f8fb" stroke="#273142" stroke-width="3"/>
+  <text x="818" y="394" class="flow-text">导入 CAD</text>
+  <text x="818" y="421" class="flow-text">与扫描点云</text>
+
+  <rect x="955" y="354" width="165" height="100" rx="12" fill="#f6f8fb" stroke="#273142" stroke-width="3"/>
+  <text x="1038" y="394" class="flow-text">预处理与</text>
+  <text x="1038" y="421" class="flow-text">工件提取</text>
+
+  <rect x="1175" y="354" width="165" height="100" rx="12" fill="#f6f8fb" stroke="#273142" stroke-width="3"/>
+  <text x="1258" y="394" class="flow-text">法向、曲率</text>
+  <text x="1258" y="421" class="flow-text">与 FPFH</text>
+
+  <rect x="1395" y="354" width="105" height="100" rx="12" fill="#eaf1ff" stroke="#273142" stroke-width="3"/>
+  <text x="1448" y="394" class="flow-text">多源</text>
+  <text x="1448" y="421" class="flow-text">粗配准</text>
+
+  <line x1="900" y1="404" x2="950" y2="404" stroke="#273142" stroke-width="3" marker-end="url(#arrow)"/>
+  <line x1="1120" y1="404" x2="1170" y2="404" stroke="#273142" stroke-width="3" marker-end="url(#arrow)"/>
+  <line x1="1340" y1="404" x2="1390" y2="404" stroke="#273142" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <path d="M1448 454 L1448 500 L1370 500 L1370 545" fill="none" stroke="#273142" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="1205" y="545" width="165" height="100" rx="12" fill="#f6f8fb" stroke="#273142" stroke-width="3"/>
+  <text x="1288" y="585" class="flow-text">候选评分与</text>
+  <text x="1288" y="612" class="flow-text">CAD 引导裁剪</text>
+
+  <rect x="985" y="545" width="165" height="100" rx="12" fill="#f6f8fb" stroke="#273142" stroke-width="3"/>
+  <text x="1068" y="585" class="flow-text">点到点 ICP</text>
+  <text x="1068" y="612" class="flow-text">粗精配准</text>
+
+  <rect x="765" y="545" width="165" height="100" rx="12" fill="#f6f8fb" stroke="#273142" stroke-width="3"/>
+  <text x="848" y="585" class="flow-text">鲁棒点到面</text>
+  <text x="848" y="612" class="flow-text">ICP 精配准</text>
+
+  <line x1="1200" y1="595" x2="1155" y2="595" stroke="#273142" stroke-width="3" marker-end="url(#arrow)"/>
+  <line x1="980" y1="595" x2="935" y2="595" stroke="#273142" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <path d="M765 595 L720 595 L720 711 L765 711" fill="none" stroke="#273142" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect x="785" y="661" width="435" height="100" rx="12" fill="#eaf1ff" stroke="#0b45a7" stroke-width="3"/>
+  <text x="1003" y="701" class="flow-text">质量评价与结果判定</text>
+  <text x="1003" y="728" class="flow-text">覆盖率 / 法向 / RMSE / P95</text>
+
+  <line x1="1220" y1="711" x2="1325" y2="711" stroke="#273142" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect x="1340" y="661" width="160" height="100" rx="12" fill="#dcecff" stroke="#0b45a7" stroke-width="3"/>
+  <text x="1420" y="699" class="flow-text">输出 T_final</text>
+  <text x="1420" y="726" class="flow-text">CAD → 扫描</text>
+
+  <text x="1110" y="810" class="small" text-anchor="middle">匹配通过后，T_final 作为焊缝刚性映射的坐标变换依据</text>
+</svg>
