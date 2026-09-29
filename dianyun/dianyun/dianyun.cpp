@@ -530,27 +530,16 @@ void dianyun::resizeEvent(QResizeEvent* event)
 
 void dianyun::on_btnOpenCamera_clicked()
 {
-    if (!m_cameraWorker) {
-        m_cameraWorker = new HikCameraWorker(this);
-        connect(m_cameraWorker, &HikCameraWorker::pointCloudReady,
-            this, &dianyun::onCameraPointCloudReady);
-        connect(m_cameraWorker, &HikCameraWorker::captureFinished,
-            this, [this]() { updateActionStates(); });
-        connect(m_cameraWorker, &HikCameraWorker::captureFailed,
-            this, [this](const QString& message) {
-                appendLog(QString::fromUtf8("相机采集失败：") + message);
-            });
+    if (ui->ledCapture) {
+        ui->ledCapture->startBlinking(20 * 1000);
     }
+}
 
-    appendLog(QString::fromUtf8("正在尝试独占连接3D相机..."));
-    if (m_cameraWorker->openCamera()) {
-        appendLog(QString::fromUtf8("相机连接成功，正在采集并拼装三维点云。"));
+void dianyun::on_btnRobotWeld_clicked()
+{
+    if (ui->ledRobotWeld) {
+        ui->ledRobotWeld->startBlinking(40 * 1000);
     }
-    else {
-        appendLog(QString::fromUtf8("相机启动失败：") +
-            m_cameraWorker->lastError());
-    }
-    updateActionStates();
 }
 
 void dianyun::onCameraPointCloudReady(CloudRGB::Ptr newCloud)

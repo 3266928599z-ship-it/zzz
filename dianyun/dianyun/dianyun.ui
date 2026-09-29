@@ -48,6 +48,19 @@
          </widget>
         </item>
         <item>
+         <widget class="QRoundLed" name="ledCapture"/>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btnRobotWeld">
+          <property name="text">
+           <string>机械臂焊接</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QRoundLed" name="ledRobotWeld"/>
+        </item>
+        <item>
          <spacer name="horizontalSpacer">
           <property name="orientation">
            <enum>Qt::Orientation::Horizontal</enum>
@@ -199,5 +212,12 @@
  <resources>
   <include location="dianyun.qrc"/>
  </resources>
+ <customwidgets>
+  <customwidget>
+   <class>QRoundLed</class>
+   <extends>QWidget</extends>
+   <header>QRoundLed.h</header>
+  </customwidget>
+ </customwidgets>
  <connections/>
 </ui>

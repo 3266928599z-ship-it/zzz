@@ -37,6 +37,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="QRoundLed.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -65,6 +66,7 @@
     <QtMoc Include="PointCloudLoadController.h"><Filter>Header Files</Filter></QtMoc>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="QRoundLed.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="AppTypes.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="CameraCaptureState.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="MatchTypes.h"><Filter>Header Files</Filter></ClInclude>

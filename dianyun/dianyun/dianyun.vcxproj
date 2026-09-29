@@ -127,6 +127,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="QRoundLed.cpp" />
     <ClCompile Include="ModelMatchController.cpp" />
     <ClCompile Include="ModelMatchWorker.cpp" />
     <ClCompile Include="PointCloudLoadController.cpp" />
@@ -151,6 +152,7 @@
     <QtMoc Include="PointCloudLoadController.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="QRoundLed.h" />
     <ClInclude Include="AppTypes.h" />
     <ClInclude Include="CameraCaptureState.h" />
     <ClInclude Include="MatchTypes.h" />

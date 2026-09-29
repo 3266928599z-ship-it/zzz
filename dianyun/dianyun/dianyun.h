@@ -43,6 +43,7 @@ private slots:
     void on_btnOpen_clicked();
     void on_btnOpen_2_clicked();
     void on_btnOpenCamera_clicked();
+    void on_btnRobotWeld_clicked();
     void onCameraPointCloudReady(CloudRGB::Ptr newCloud);
     void onPointCloudLoadFinished(CloudRGB::Ptr cloud, double diagonal);
     void onPointCloudLoadFailed(QString errorMessage);
