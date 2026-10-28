@@ -18,4 +18,6 @@ struct WeldSeamData {
     CloudRGB::Ptr points = CloudRGB::Ptr(new CloudRGB());
     std::vector<WeldSeamSegment> segments;
     double length = 0.0;
+    int faceA = -1;
+    int faceB = -1;
 };

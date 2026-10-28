@@ -17,9 +17,13 @@
 #include "WeldTypes.h"
 
 #include <QtWidgets/QMainWindow>
+#include <QLabel>
 #include <QListWidget>
 #include <QResizeEvent>
+#include <QSet>
+#include <QShowEvent>
 #include <QTimer>
+#include <QTreeWidget>
 
 #include <pcl/visualization/pcl_visualizer.h>
 
@@ -36,8 +40,12 @@ public:
     explicit dianyun(QWidget* parent = nullptr);
     ~dianyun() override;
 
+    enum class LogLevel { Normal, Success, Warning, Error, Info };
+    enum class AlarmLevel { Info, Warning, Error };
+
 protected:
     void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
 private slots:
     void on_btnOpen_clicked();
@@ -58,8 +66,10 @@ private slots:
     void on_btnMapSeam_clicked();
     void on_btnCancel_clicked();
     void on_btnDeleteSeam_clicked();
+    void on_btnAckAlarm_clicked();
+    void on_btnFitView_clicked();
     void on_listWeldSeams_currentItemChanged(
-        QListWidgetItem* current, QListWidgetItem* previous);
+        QTreeWidgetItem* current, QTreeWidgetItem* previous);
     void updatePCLWindow();
 
 private:
@@ -91,10 +101,43 @@ private:
     int m_selectedFaceB = -1;
     bool m_reportProgressiveRender = false;
     int m_lastRenderPercent = -1;
+    bool m_initialSplitApplied = false;
+
+    QLabel* m_statusStage = nullptr;
+    QLabel* m_statusCad = nullptr;
+    QLabel* m_statusCloud = nullptr;
+    QLabel* m_statusMatch = nullptr;
+    QLabel* m_statusSeam = nullptr;
+
+    int m_alarmCount = 0;
+    AlarmLevel m_worstAlarmLevel = AlarmLevel::Info;
+    QString m_lastAlarmText;
+    QSet<QString> m_seenAlarms;
 
     void initializeViewers();
+    void fitToAvailableScreen();
+    void setupThemeAssets();
+    void setupSplitters();
+    void applyInitialSplitSizes();
+    void setupMenuAndShortcuts();
+    void initStatusBar();
+
     void updateStatusUI();
+    void setStatusText(const QString& text,
+        AlarmLevel tone = AlarmLevel::Info);
+
+    void showAlarm(AlarmLevel level, const QString& message);
+    void clearAlarms();
+    void refreshAlarmBanner();
+
+    void showMatchCard(const MatchResult& result);
+    void resetMatchCard();
+    void refreshDataSummary();
+
     void appendLog(const QString& message);
+    void appendLog(const QString& message, LogLevel level);
+
+    void syncSeamRowMapping(const std::string& seamId);
     void resetSeamSelection();
     void clearSeams();
     void clearMappedSeamResults();

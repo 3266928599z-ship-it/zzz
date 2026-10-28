@@ -1,4 +1,12 @@
 <RCC>
-    <qresource prefix="dianyun">
+    <qresource prefix="/dianyun">
+        <file alias="theme/dark.qss">resources/theme/dark.qss</file>
+        <file alias="icons/import-cad.svg">resources/icons/import-cad.svg</file>
+        <file alias="icons/import-cloud.svg">resources/icons/import-cloud.svg</file>
+        <file alias="icons/match.svg">resources/icons/match.svg</file>
+        <file alias="icons/camera.svg">resources/icons/camera.svg</file>
+        <file alias="icons/robot-arm.svg">resources/icons/robot-arm.svg</file>
+        <file alias="icons/fit-view.svg">resources/icons/fit-view.svg</file>
+        <file alias="icons/alarm-clear.svg">resources/icons/alarm-clear.svg</file>
     </qresource>
 </RCC>

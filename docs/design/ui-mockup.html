@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>dianyun 界面重构样张</title>
+<style>
+  :root{
+    --bg-app:#1E1E1E; --bg-panel:#252526; --bg-elevated:#2D2D30;
+    --bg-input:#1B1B1B; --bg-viewport:#171717;
+    --border:#3F3F46; --border-strong:#52525B;
+    --text-primary:#E4E4E7; --text-secondary:#A1A1AA; --text-disabled:#6B6B73;
+    --accent:#F57C00; --accent-hover:#FB8C00; --accent-pressed:#E65100;
+    --ok:#2AC44E; --warn:#F57C00; --error:#E53935; --info:#29B6F6;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:#0d0d0d; color:var(--text-primary);
+    font-family:"Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+    font-size:12.5px; display:flex; justify-content:center; padding:24px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .screen{
+    width:1560px; height:900px; background:var(--bg-app);
+    border:1px solid var(--border-strong); display:flex; flex-direction:column;
+    box-shadow:0 24px 70px rgba(0,0,0,.75); overflow:hidden;
+  }
+
+  /* ---------- 标题栏 ---------- */
+  .titlebar{
+    height:34px; background:var(--bg-elevated); display:flex; align-items:center;
+    padding:0 12px; gap:14px; border-bottom:1px solid var(--border); flex:0 0 auto;
+  }
+  .titlebar .app{font-size:12.5px; letter-spacing:.3px}
+  .titlebar .app b{color:var(--accent); font-weight:600}
+  .menus{display:flex; gap:2px; margin-left:8px}
+  .menus span{padding:4px 10px; border-radius:3px; color:var(--text-secondary); cursor:default}
+  .menus span:hover{background:#3A3A3E; color:var(--text-primary)}
+  .winbtns{margin-left:auto; display:flex; gap:2px}
+  .winbtns i{
+    width:34px; height:26px; display:grid; place-items:center;
+    font-style:normal; color:var(--text-secondary); border-radius:3px; font-size:11px;
+  }
+  .winbtns i:hover{background:#3A3A3E}
+  .winbtns i.close:hover{background:var(--error); color:#fff}
+
+  /* ---------- 工具栏 ---------- */
+  .toolbar{
+    height:58px; background:var(--bg-elevated); display:flex; align-items:center;
+    padding:0 10px; gap:2px; border-bottom:1px solid var(--border); flex:0 0 auto;
+  }
+  .tbtn{
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:4px; min-width:70px; height:48px; padding:4px 8px; border-radius:4px;
+    color:#C8C8C8; font-size:11px; cursor:pointer; position:relative; white-space:nowrap;
+  }
+  .tbtn:hover{background:#3A3A3E; color:#fff}
+  .tbtn:active{background:#45454A}
+  .tbtn.off{color:var(--text-disabled); cursor:not-allowed}
+  .tbtn.off:hover{background:transparent; color:var(--text-disabled)}
+  .tbtn svg{width:22px; height:22px; stroke:currentColor; fill:none;
+    stroke-width:1.75; stroke-linecap:round; stroke-linejoin:round}
+  .tbtn .led{
+    position:absolute; right:8px; top:6px; width:8px; height:8px; border-radius:50%;
+    background:#5C646C; border:1px solid #2D343C;
+  }
+  .tbtn .led.on{background:var(--ok); box-shadow:0 0 7px rgba(42,196,78,.85)}
+  .sep{width:1px; height:36px; background:var(--border); margin:0 8px}
+
+  /* ---------- 告警条 ---------- */
+  .banner{
+    height:32px; background:var(--accent); display:flex; align-items:center;
+    gap:10px; padding:0 14px; color:#1E1E1E; font-weight:600; flex:0 0 auto;
+  }
+  .banner .ico{font-size:13px}
+  .banner .msg{flex:1; font-size:12.5px}
+  .banner .count{
+    background:rgba(0,0,0,.22); border-radius:9px; padding:1px 7px; font-size:11px;
+  }
+  .banner .ack{
+    border:1px solid rgba(0,0,0,.35); background:transparent; color:#1E1E1E;
+    font:inherit; font-size:11.5px; font-weight:600; padding:3px 12px; border-radius:3px;
+    cursor:pointer; font-family:inherit;
+  }
+  .banner .ack:hover{background:rgba(0,0,0,.14)}
+
+  /* ---------- 主体 ---------- */
+  .body{flex:1; display:flex; flex-direction:column; min-height:0}
+  .workspace{flex:1; display:flex; min-height:0}
+  .pane-side{
+    width:330px; flex:0 0 auto; background:var(--bg-panel);
+    display:flex; flex-direction:column; border-right:1px solid var(--border);
+  }
+  .pane-right{
+    width:302px; flex:0 0 auto; background:var(--bg-panel);
+    display:flex; flex-direction:column; border-left:1px solid var(--border);
+  }
+  .pane-head{
+    height:38px; display:flex; align-items:center; gap:6px;
+    padding:0 10px 0 14px; border-bottom:1px solid var(--border); flex:0 0 auto;
+  }
+  .pane-title{
+    font-size:11.5px; font-weight:600; letter-spacing:.6px;
+    color:var(--text-secondary); flex:1;
+  }
+  .iconbtn{
+    width:26px; height:26px; display:grid; place-items:center; border-radius:4px;
+    color:var(--text-secondary); cursor:pointer; font-size:15px; line-height:1;
+    background:transparent; border:1px solid transparent; font-family:inherit;
+  }
+  .iconbtn:hover{background:#3A3A3E; color:var(--text-primary); border-color:var(--border)}
+  .iconbtn.danger:hover{color:var(--error); border-color:var(--error)}
+
+  /* 表格 */
+  .table{flex:1; overflow:auto; padding:6px 8px}
+  .table table{width:100%; border-collapse:collapse; font-size:12px}
+  .table th{
+    text-align:left; font-weight:600; font-size:11px; color:var(--text-secondary);
+    padding:6px 6px; background:var(--bg-panel); border-bottom:1px solid var(--border);
+    position:sticky; top:0;
+  }
+  .table th:first-child{border-radius:3px 0 0 0}
+  .table th:last-child{border-radius:0 3px 0 0}
+  .table td{padding:7px 6px; border-bottom:1px solid #2A2A2E; color:var(--text-primary)}
+  .table tr:hover td{background:#2A2A2E}
+  .table tr.sel td{background:var(--accent); color:#fff; font-weight:600}
+  .table tr.sel td .dot{background:#fff !important; box-shadow:none !important}
+  .num{font-family:Consolas,"Courier New",monospace; text-align:right}
+  .dim{color:var(--text-disabled)}
+  .dot{
+    display:inline-block; width:7px; height:7px; border-radius:50%;
+    background:var(--ok); box-shadow:0 0 6px rgba(42,196,78,.7);
+  }
+  .dot.off{background:#4A4A50; box-shadow:none}
+
+  /* 状态卡 */
+  .statuscard{
+    margin:0 10px 10px; padding:9px 11px; background:var(--bg-input);
+    border:1px solid var(--border); border-left:2px solid var(--accent); border-radius:4px;
+    font-size:12px; display:flex; align-items:center; gap:8px; flex:0 0 auto;
+  }
+  .statuscard .dot{width:8px; height:8px}
+  .statuscard .stage{color:var(--text-primary)}
+  .statuscard .hint{margin-left:auto; font-size:11px; color:var(--text-disabled)}
+
+  /* 视口区 */
+  .viewports{flex:1; display:flex; min-width:0; padding:8px; gap:0}
+  .vp{
+    flex:1; position:relative; background:var(--bg-viewport);
+    border:1px solid var(--border); display:flex; align-items:center;
+    justify-content:center; overflow:hidden; min-width:0;
+  }
+  .vp + .vp{margin-left:4px}
+  .vp .tag{
+    position:absolute; top:8px; left:8px; padding:3px 9px; border-radius:3px;
+    background:rgba(45,45,48,.88); color:var(--text-secondary);
+    font-size:11px; font-weight:600; letter-spacing:.4px;
+    border:1px solid rgba(255,255,255,.06);
+  }
+  .vp .readout{
+    position:absolute; bottom:7px; left:10px; font-family:Consolas,monospace;
+    font-size:10.5px; color:#56565E;
+  }
+  .vp .readout b{color:#7D7D86; font-weight:400}
+  /* 模拟场景 */
+  .scene{width:100%; height:100%; position:relative}
+  .hint-empty{
+    color:#3E3E44; font-size:12px; letter-spacing:1px; text-align:center;
+    line-height:1.9;
+  }
+  .hint-empty small{display:block; font-size:11px; color:#33333A}
+
+  /* 右侧分区 */
+  .section{padding:12px 12px 0; flex:0 0 auto}
+  .section-label{
+    font-size:10.5px; font-weight:600; letter-spacing:.8px;
+    color:var(--text-disabled); margin-bottom:8px; text-transform:uppercase;
+  }
+  .btn{
+    display:flex; align-items:center; justify-content:center; gap:6px;
+    width:100%; padding:9px 14px; border-radius:4px; font:inherit; font-size:12.5px;
+    cursor:pointer; border:1px solid transparent; font-family:inherit;
+  }
+  .btn.primary{background:var(--accent); color:#fff; font-weight:600}
+  .btn.primary:hover{background:var(--accent-hover)}
+  .btn.primary:active{background:var(--accent-pressed)}
+  .btn.ghost{background:transparent; color:var(--text-primary); border-color:var(--border)}
+  .btn.ghost:hover{border-color:var(--accent); color:var(--accent)}
+  .btn.disabled{background:#33333A; color:var(--text-disabled); cursor:not-allowed}
+  .btn.small{padding:7px 12px; font-size:12px}
+  .btnrow{display:flex; gap:8px}
+  .divider{height:1px; background:var(--border); margin:14px 12px 0}
+
+  /* 匹配结果卡 */
+  .card{
+    margin:12px 12px 0; padding:11px 12px; background:var(--bg-input);
+    border:1px solid var(--border); border-radius:4px;
+  }
+  .card-head{
+    display:flex; align-items:center; gap:7px; padding-bottom:9px;
+    border-bottom:1px solid #2F2F34; margin-bottom:9px;
+  }
+  .verdict{display:flex; align-items:center; gap:6px; font-weight:600; font-size:12.5px}
+  .verdict.warn{color:var(--warn)}
+  .verdict .dot{background:var(--warn); box-shadow:0 0 6px rgba(245,124,0,.7); width:8px; height:8px}
+  .card-head .cov{margin-left:auto; font-size:11px; color:var(--text-secondary)}
+  .metric{display:flex; justify-content:space-between; padding:3px 0; font-size:11.5px}
+  .metric span{color:var(--text-secondary)}
+  .metric b{font-family:Consolas,monospace; font-weight:400; color:var(--text-primary)}
+
+  /* 数据概况 */
+  .kv{display:flex; justify-content:space-between; padding:4px 0; font-size:11.5px}
+  .kv span{color:var(--text-secondary)}
+  .kv b{font-family:Consolas,monospace; font-weight:400}
+
+  /* 日志 */
+  .logwrap{
+    height:186px; flex:0 0 auto; background:var(--bg-panel);
+    border-top:1px solid var(--border); display:flex; flex-direction:column;
+    position:relative;
+  }
+  .logwrap::before{
+    content:""; position:absolute; top:-3px; left:0; right:0; height:4px;
+    cursor:row-resize; background:transparent;
+  }
+  .tabs{display:flex; align-items:center; height:34px; padding:0 8px; gap:2px;
+    border-bottom:1px solid var(--border); flex:0 0 auto}
+  .tab{
+    padding:8px 16px; font-size:12px; color:var(--text-secondary); cursor:pointer;
+    border-bottom:2px solid transparent; margin-bottom:-1px; display:flex; align-items:center; gap:6px;
+  }
+  .tab:hover{color:var(--text-primary)}
+  .tab.active{color:var(--text-primary); border-bottom-color:var(--accent); font-weight:600}
+  .tab .badge{
+    background:var(--error); color:#fff; border-radius:8px; padding:0 6px;
+    font-size:10px; font-weight:700; line-height:15px; height:15px;
+  }
+  .tabs .spacer{flex:1}
+  .tabs .tools{display:flex; gap:2px}
+  .logbody{
+    flex:1; overflow:auto; padding:7px 12px; font-family:Consolas,"Courier New",monospace;
+    font-size:11.5px; line-height:1.75;
+  }
+  .logline{white-space:pre; color:var(--text-primary)}
+  .logline .t{color:#5A5A62}
+  .logline.err{color:#EF5350}
+  .logline.ok{color:#43D06A}
+  .logline.warn{color:#FFA726}
+  .logline.info{color:#4FC3F7}
+
+  /* 状态栏 */
+  .statusbar{
+    height:26px; background:var(--bg-elevated); border-top:1px solid var(--border);
+    display:flex; align-items:center; padding:0 12px; gap:0; font-size:11.5px;
+    color:var(--text-secondary); flex:0 0 auto;
+  }
+  .statusbar .item{display:flex; align-items:center; gap:6px; padding:0 12px; white-space:nowrap}
+  .statusbar .item:first-child{padding-left:0}
+  .statusbar .div{width:1px; height:12px; background:var(--border)}
+  .statusbar .right{margin-left:auto; display:flex; align-items:center}
+  .statusbar .dot{width:7px; height:7px; background:var(--warn); box-shadow:0 0 6px rgba(245,124,0,.6)}
+  .statusbar b{font-family:Consolas,monospace; font-weight:400; color:var(--text-primary)}
+  .fps{color:var(--ok); font-family:Consolas,monospace}
+
+  /* 标注 */
+  .annot{
+    position:absolute; background:var(--accent); color:#1E1E1E; font-size:10px;
+    font-weight:700; padding:2px 6px; border-radius:3px; letter-spacing:.4px; z-index:20;
+  }
+</style>
+</head>
+<body>
+<div class="screen">
+
+  <!-- 标题栏 -->
+  <div class="titlebar">
+    <div class="app">dianyun <b>焊接视觉系统</b> · 演示模式</div>
+    <div class="menus"><span>文件</span><span>视图</span><span>帮助</span></div>
+    <div class="winbtns"><i>—</i><i>□</i><i class="close">✕</i></div>
+  </div>
+
+  <!-- 工具栏 -->
+  <div class="toolbar">
+    <div class="tbtn">
+      <svg viewBox="0 0 24 24"><path d="M12 3 3 7.5v9L12 21l9-4.5v-9L12 3Z"/><path d="M3 7.5 12 12l9-4.5"/><path d="M12 12v9"/></svg>
+      <span>导入三维模型</span>
+    </div>
+    <div class="tbtn">
+      <svg viewBox="0 0 24 24"><circle cx="6" cy="7" r="1.4"/><circle cx="12" cy="5" r="1.2"/><circle cx="18" cy="8" r="1.3"/><circle cx="8" cy="12" r="1.2"/><circle cx="15" cy="11" r="1.4"/><circle cx="10" cy="17" r="1.2"/><circle cx="18" cy="16" r="1.3"/><path d="M12 19v-5"/><path d="m9.5 16.5 2.5 2.5 2.5-2.5"/></svg>
+      <span>导入点云模型</span>
+    </div>
+    <div class="sep"></div>
+    <div class="tbtn">
+      <svg viewBox="0 0 24 24"><path d="M5 7h9v9H5z" stroke-dasharray="2.5 2"/><path d="M10 12h9v9h-9" stroke-dasharray="2.5 2"/><path d="M14 10l5-5"/><path d="M17 5h2v2"/></svg>
+      <span>模型匹配</span>
+    </div>
+    <div class="sep"></div>
+    <div class="tbtn off" title="相机未连接">
+      <svg viewBox="0 0 24 24"><path d="M3 8.5A1.5 1.5 0 0 1 4.5 7h3l1.5-2h6L16.5 7h3A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-9Z"/><circle cx="12" cy="13" r="3.4"/></svg>
+      <span>开始拍摄</span>
+      <i class="led"></i>
+    </div>
+    <div class="tbtn off" title="机械臂未连接">
+      <svg viewBox="0 0 24 24"><path d="M4 20h6"/><path d="M7 20v-4.5"/><path d="m7 15.5 5-4"/><path d="m12 11.5 1.5-5.5"/><path d="M13.5 6 17 4l2.2 2.4-1 3.4-3.2.5"/><circle cx="7" cy="15.5" r="1.6"/><circle cx="12" cy="11.5" r="1.5"/></svg>
+      <span>机械臂焊接</span>
+      <i class="led"></i>
+    </div>
+    <div style="flex:1"></div>
+    <div class="tbtn" title="复位视图 (F5)">
+      <svg viewBox="0 0 24 24"><path d="M4 9V4h5"/><path d="M20 9V4h-5"/><path d="M4 15v5h5"/><path d="M20 15v5h-5"/><circle cx="12" cy="12" r="2.6"/></svg>
+      <span>视图复位</span>
+    </div>
+  </div>
+
+  <!-- 告警条 -->
+  <div class="banner" style="position:relative">
+    <span class="ico">⚠</span>
+    <span class="msg">匹配质量不足：覆盖率 61.0%，低于门槛 75%，请调整工位或重新采集</span>
+    <span class="count">2</span>
+    <button class="ack">解除报警</button>
+    <span class="annot" style="right:-1px; top:-1px; transform:translateY(-100%)">① 告警条（默认隐藏）</span>
+  </div>
+
+  <div class="body">
+    <div class="workspace">
+
+      <!-- 左栏 -->
+      <div class="pane-side">
+        <div class="pane-head">
+          <span class="pane-title">焊缝列表</span>
+          <button class="iconbtn" title="新建焊缝">+</button>
+          <button class="iconbtn danger" title="删除选中">×</button>
+        </div>
+        <div class="table">
+          <table>
+            <thead>
+              <tr><th style="width:44%">焊缝</th><th style="width:22%;text-align:right">长度</th>
+                  <th style="width:20%">面</th><th style="width:14%;text-align:center">映射</th></tr>
+            </thead>
+            <tbody>
+              <tr class="sel"><td>焊缝-1</td><td class="num">42.5</td><td>A1·B2</td><td style="text-align:center"><i class="dot"></i></td></tr>
+              <tr><td>焊缝-2</td><td class="num">18.0</td><td>A3·B4</td><td style="text-align:center"><i class="dot off"></i></td></tr>
+              <tr><td>焊缝-3</td><td class="num">26.7</td><td>A5·B6</td><td style="text-align:center"><i class="dot off"></i></td></tr>
+              <tr><td class="dim">焊缝-4</td><td class="num dim">9.4</td><td class="dim">A7·B8</td><td style="text-align:center"><i class="dot off"></i></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="statuscard">
+          <i class="dot"></i>
+          <span class="stage">就绪</span>
+          <span class="hint">Ctrl+点击选面</span>
+        </div>
+      </div>
+
+      <!-- 中区 -->
+      <div class="viewports">
+        <div class="vp">
+          <div class="tag">三维模型</div>
+          <div class="hint-empty">已加载 STEP 模型<small>按住 Ctrl 单击两个曲面创建焊缝</small></div>
+          <div class="readout"><b>CAD</b> 12,345 采样点</div>
+        </div>
+        <div class="vp">
+          <div class="tag">点云模型</div>
+          <div class="hint-empty">点云显示完成<small>486,210 点 · 分批渲染已结束</small></div>
+          <div class="readout"><b>点云</b> 486,210 点</div>
+        </div>
+      </div>
+
+      <!-- 右栏 -->
+      <div class="pane-right">
+        <div class="pane-head"><span class="pane-title">焊缝操作</span></div>
+        <div class="section">
+          <button class="btn primary">焊缝映射</button>
+        </div>
+        <div class="section" style="padding-top:8px">
+          <button class="btn ghost">取消操作</button>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="verdict warn"><i class="dot"></i>需要人工确认</span>
+            <span class="cov">覆盖率 61%</span>
+          </div>
+          <div class="metric"><span>RMSE</span><b>0.831</b></div>
+          <div class="metric"><span>P95 残差</span><b>1.924</b></div>
+          <div class="metric"><span>法向一致性</span><b>72.4%</b></div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="section">
+          <div class="section-label">数据概况</div>
+          <div class="kv"><span>CAD 采样点</span><b>12,345</b></div>
+          <div class="kv"><span>点云点数</span><b>486,210</b></div>
+          <div class="kv"><span>焊缝数量</span><b>4</b></div>
+          <div class="kv"><span>已映射</span><b>1</b></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 日志 -->
+    <div class="logwrap">
+      <div class="tabs">
+        <div class="tab active">日志</div>
+        <div class="tab">报警 <span class="badge">2</span></div>
+        <div class="spacer"></div>
+        <div class="tools">
+          <button class="iconbtn" title="清空日志">⌫</button>
+          <button class="iconbtn" title="滚动到底部">⇩</button>
+        </div>
+      </div>
+      <div class="logbody">
+        <div class="logline"><span class="t">[13:49:07]</span> 系统已启动，操作日志就绪。</div>
+        <div class="logline"><span class="t">[13:49:22]</span> 正在导入三维模型：bracket.step</div>
+        <div class="logline ok"><span class="t">[13:49:24]</span> 三维模型导入成功，CAD采样点数：12345</div>
+        <div class="logline"><span class="t">[13:49:41]</span> 准备导入完整点云：scan_20261026.pcd</div>
+        <div class="logline info"><span class="t">[13:49:46]</span> 完整点云后台加载成功，共 486210 点，正在分批显示全部点云...</div>
+        <div class="logline ok"><span class="t">[13:49:58]</span> 完整点云显示完成，共 486210 点。</div>
+        <div class="logline"><span class="t">[13:50:11]</span> 模型匹配开始：全场景自动分割与CAD引导裁剪。</div>
+        <div class="logline warn"><span class="t">[13:50:14]</span> 模型匹配需要人工确认：覆盖率 61.0%，RMSE 0.831，P95 1.924。</div>
+        <div class="logline warn"><span class="t">[13:50:14]</span> 诊断：CAD支持 58.2%，特征覆盖 63.7%，空间覆盖 61.0%，法向一致性 72.4%。</div>
+        <div class="logline err"><span class="t">[13:50:31]</span> 焊缝映射失败：最新模型匹配尚未通过，不能进行焊缝映射。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 状态栏 -->
+  <div class="statusbar">
+    <div class="item"><i class="dot"></i>需人工确认</div>
+    <div class="div"></div>
+    <div class="item">CAD <b>12,345</b> 点</div>
+    <div class="div"></div>
+    <div class="item">点云 <b>486,210</b> 点</div>
+    <div class="div"></div>
+    <div class="item">匹配 <b style="color:var(--warn)">需确认</b></div>
+    <div class="div"></div>
+    <div class="item">焊缝 <b>4</b> / 已映射 <b>1</b></div>
+    <div class="right">
+      <div class="item"><span class="fps">30.0 FPS</span></div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
