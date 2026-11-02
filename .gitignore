@@ -361,3 +361,20 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# ============================================================
+# 外部 SDK 与第三方库
+# ============================================================
+
+# 海康 3D 传感器 SDK 原始安装包（解压备份，约 120 MB）
+# 仅需保留安装包本身或重新从官网下载；编译依赖见 dianyun/third_party/mv3dlp/
+3dmvs-lpsdk/
+
+# 法奥协作机器人 C++ SDK（独立 git 仓库，需按 README 单独克隆）
+# 正式接入时改用 git submodule 管理
+fairino-cpp-sdk/
+
+# fairino 运行库为厂商二进制，不纳入版本库；
+# 编译前从 fairino-cpp-sdk 复制到 dianyun/third_party/fairino/，见 dianyun/README.md
+dianyun/third_party/fairino/lib/*.dll
+dianyun/third_party/fairino/lib/*.lib

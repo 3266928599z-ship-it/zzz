@@ -38,6 +38,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="QRoundLed.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="DeviceIndicator.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="RobotWorker.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -64,11 +66,13 @@
     </QtMoc>
     <QtMoc Include="ModelMatchController.h"><Filter>Header Files</Filter></QtMoc>
     <QtMoc Include="PointCloudLoadController.h"><Filter>Header Files</Filter></QtMoc>
+    <QtMoc Include="RobotWorker.h"><Filter>Header Files</Filter></QtMoc>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="QRoundLed.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="AppTypes.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="CameraCaptureState.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="RobotTypes.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="MatchTypes.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="MatchRequestTracker.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="PointCloudLoader.h"><Filter>Header Files</Filter></ClInclude>

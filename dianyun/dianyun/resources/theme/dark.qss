@@ -40,6 +40,31 @@ QFrame#topBarSep1, QFrame#topBarSep2 {
     max-width: 1px; min-width: 1px;
 }
 
+/* ===== 顶栏设备连接态 ===== */
+QWidget#topBar QToolButton[linkState="connecting"] {
+    color: #C8C8C8;
+}
+QWidget#topBar QToolButton[linkState="online"],
+QWidget#topBar QToolButton[linkState="online"]:hover {
+    color: #2AC44E;
+}
+QWidget#topBar QToolButton[linkState="busy"],
+QWidget#topBar QToolButton[linkState="busy"]:hover {
+    color: #2AC44E;
+}
+QWidget#topBar QToolButton[linkState="fault"],
+QWidget#topBar QToolButton[linkState="fault"]:hover {
+    color: #E53935;
+}
+/* 兜底：即使处于 disabled，也不要吃掉状态色 */
+QWidget#topBar QToolButton[linkState="online"]:disabled,
+QWidget#topBar QToolButton[linkState="busy"]:disabled {
+    color: #2AC44E;
+}
+QWidget#topBar QToolButton[linkState="fault"]:disabled {
+    color: #E53935;
+}
+
 /* ===== 告警条 ===== */
 QFrame#warningBanner {
     background: #F57C00;

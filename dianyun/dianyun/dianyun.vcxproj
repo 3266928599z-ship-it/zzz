@@ -58,7 +58,11 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
     <Import Project="$(QtMsBuild)\Qt.props" />
   </ImportGroup>
-  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Label="UserMacros">
+    <Mv3dLpRoot>$(ProjectDir)..\third_party\mv3dlp</Mv3dLpRoot>
+    <!-- fairino 只提供 vs2022 x86-64 的 Release 库，Debug 配置不启用机械臂模块 -->
+    <FairinoSdkRoot>$(ProjectDir)..\third_party\fairino</FairinoSdkRoot>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
@@ -74,28 +78,33 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
-      <PreprocessorDefinitions>PCL_NO_PRECOMPILE;BOOST_USE_WINDOWS_H;NOMINMAX;_CRT_SECURE_NO_WARNINGS;PCL_SILENCE_MALLOC_WARNING;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PCL_NO_PRECOMPILE;BOOST_USE_WINDOWS_H;NOMINMAX;_CRT_SECURE_NO_WARNINGS;PCL_SILENCE_MALLOC_WARNING;DIANYUN_ROBOT_SDK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(VcpkgRoot)\installed\x64-windows\include\eigen3;$(VcpkgRoot)\installed\x64-windows\include\opencascade;$(VcpkgRoot)\installed\x64-windows\include\vtk-9.3;"E:\MVS\Development\Includes";%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VcpkgRoot)\installed\x64-windows\include\eigen3;$(VcpkgRoot)\installed\x64-windows\include\opencascade;$(VcpkgRoot)\installed\x64-windows\include\vtk-9.3;$(Mv3dLpRoot)\include;$(FairinoSdkRoot)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OpenMPSupport>true</OpenMPSupport>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>E:\PCL 1.15.1\lib;E:\PCL 1.15.1\3rdParty\Boost\lib;E:\PCL 1.15.1\3rdParty\FLANN\lib;E:\PCL 1.15.1\3rdParty\VTK\lib;E:\PCL 1.15.1\3rdParty\OpenNI2\Lib;%(AdditionalLibraryDirectories);Z:\vcpkg-master\installed\x64-windows\lib;"E:\MVS\Development\Libraries\win64"</AdditionalLibraryDirectories>
-      <AdditionalDependencies>%(AdditionalDependencies);MvCameraControl.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(VcpkgRoot)\installed\x64-windows\lib;$(Mv3dLpRoot)\lib;$(FairinoSdkRoot)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>%(AdditionalDependencies);Mv3dLp.lib;fairino.lib</AdditionalDependencies>
     </Link>
+    <!-- fairino 运行库不入库，编译前按 README 复制到 third_party/fairino/lib -->
+    <PostBuildEvent>
+      <Command>if exist "$(FairinoSdkRoot)\lib\fairino.dll" copy /y "$(FairinoSdkRoot)\lib\fairino.dll" "$(OutDir)" &gt;nul</Command>
+      <Message>复制 fairino.dll 到输出目录</Message>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(VcpkgRoot)\installed\x64-windows\include\eigen3;$(VcpkgRoot)\installed\x64-windows\include\opencascade;$(VcpkgRoot)\installed\x64-windows\include\vtk-9.3;"E:\MVS\Development\Includes";%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VcpkgRoot)\installed\x64-windows\include\eigen3;$(VcpkgRoot)\installed\x64-windows\include\opencascade;$(VcpkgRoot)\installed\x64-windows\include\vtk-9.3;$(Mv3dLpRoot)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_UNICODE;UNICODE;%(PreprocessorDefinitions);EIGEN_DONT_VECTORIZE;EIGEN_DISABLE_UNALIGNED_ARRAY_ASSERT;NOMINMAX;_CRT_SECURE_NO_WARNINGS</PreprocessorDefinitions>
       <OpenMPSupport>true</OpenMPSupport>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>;Z:\vcpkg-master\installed\x64-windows\lib;"E:\MVS\Development\Libraries\win64"</AdditionalLibraryDirectories>
-      <AdditionalDependencies>$(CoreLibraryDependencies);%(AdditionalDependencies);MvCameraControl.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(VcpkgRoot)\installed\x64-windows\lib;$(Mv3dLpRoot)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>$(CoreLibraryDependencies);%(AdditionalDependencies);Mv3dLp.lib</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
@@ -128,6 +137,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="QRoundLed.cpp" />
+    <ClCompile Include="DeviceIndicator.cpp" />
+    <ClCompile Include="RobotWorker.cpp" />
     <ClCompile Include="ModelMatchController.cpp" />
     <ClCompile Include="ModelMatchWorker.cpp" />
     <ClCompile Include="PointCloudLoadController.cpp" />
@@ -145,6 +156,8 @@
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="HikCameraWorker.h" />
+    <QtMoc Include="DeviceIndicator.h" />
+    <QtMoc Include="RobotWorker.h" />
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="ModelMatchWorker.h" />
@@ -155,6 +168,7 @@
     <ClInclude Include="QRoundLed.h" />
     <ClInclude Include="AppTypes.h" />
     <ClInclude Include="CameraCaptureState.h" />
+    <ClInclude Include="RobotTypes.h" />
     <ClInclude Include="MatchTypes.h" />
     <ClInclude Include="MatchRequestTracker.h" />
     <ClInclude Include="PointCloudLoader.h" />

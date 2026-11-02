@@ -1,15 +1,21 @@
 #pragma once
 
+#include <QColor>
 #include <QTimer>
 #include <QWidget>
 
 class QRoundLed : public QWidget
 {
 public:
+    enum class State { Off, Solid, Blink };
+
     explicit QRoundLed(QWidget* parent = nullptr);
 
-    void startBlinking(int durationMs, int intervalMs = 400);
-    void stopBlinking();
+    void setState(State state, int intervalMs = 500);
+    void setColor(const QColor& onColor,
+        const QColor& offColor = QColor(92, 100, 108));
+
+    State state() const { return m_state; }
 
     QSize sizeHint() const override;
 
@@ -18,7 +24,8 @@ protected:
 
 private:
     QTimer m_blinkTimer;
-    QTimer m_stopTimer;
-    bool m_isBlinking = false;
+    State m_state = State::Off;
     bool m_isLit = false;
+    QColor m_onColor{ 42, 196, 78 };
+    QColor m_offColor{ 92, 100, 108 };
 };
