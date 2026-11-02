@@ -20,4 +20,7 @@ struct WeldSeamData {
     double length = 0.0;
     int faceA = -1;
     int faceB = -1;
+    // 起焊方向是否已被显式设定。真实起点恒为 points[0]，
+    // 该标志只用于界面提示，避免重复存储坐标。
+    bool hasStart = false;
 };

@@ -25,6 +25,10 @@ public:
     void showMappedSeam(const WeldSeamData& seam);
     void removeMappedSeam(const std::string& seamId);
     void clearMappedSeams();
+    // 起点球标与走向箭头。scanView 为 true 时绘制在点云视图，
+    // 需由调用方传入已映射到点云坐标系的焊缝数据。
+    void showSeamStart(const WeldSeamData& seam, bool scanView);
+    void removeSeamStart(const std::string& seamId, bool scanView);
     void selectSeam(const std::string& seamId);
     void clearSeamSelection();
     void update();
@@ -36,6 +40,8 @@ private:
     static double coordinateScale(double diagonal);
     static std::string seamActorId(const std::string& seamId);
     static std::string mappedSeamActorId(const std::string& seamId);
+    static std::string seamStartActorId(
+        const std::string& seamId, bool scanView);
     static void setSeamActorAppearance(
         const ViewerPtr& viewer,
         const std::string& actorId,

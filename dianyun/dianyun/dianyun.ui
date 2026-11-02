@@ -673,6 +673,38 @@
           </widget>
          </item>
          <item>
+          <widget class="QPushButton" name="btnSeamStart">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+           <property name="toolTip">
+            <string>选择焊缝后，按住 Ctrl 在三维视图中单击起点端</string>
+           </property>
+           <property name="text">
+            <string>设定起点</string>
+           </property>
+           <property name="role" stdset="0">
+            <string>ghost</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="btnSeamReverse">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+           <property name="toolTip">
+            <string>反转选中焊缝的焊接方向</string>
+           </property>
+           <property name="text">
+            <string>反转方向</string>
+           </property>
+           <property name="role" stdset="0">
+            <string>ghost</string>
+           </property>
+          </widget>
+         </item>
+         <item>
           <widget class="QPushButton" name="btnMapSeam">
            <property name="enabled">
             <bool>false</bool>

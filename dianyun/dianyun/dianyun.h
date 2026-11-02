@@ -6,22 +6,27 @@
 #include <windows.h>
 
 #include "AppTypes.h"
+#include "DeviceIndicator.h"
 #include "HikCameraWorker.h"
 #include "MatchTypes.h"
 #include "MatchRequestTracker.h"
 #include "ModelMatchController.h"
 #include "PointCloudLoadController.h"
+#include "RobotTypes.h"
+#include "RobotWorker.h"
 #include "StepModelLoader.h"
 #include "VisualizationManager.h"
 #include "WeldSeamService.h"
 #include "WeldTypes.h"
 
 #include <QtWidgets/QMainWindow>
+#include <QAction>
 #include <QLabel>
 #include <QListWidget>
 #include <QResizeEvent>
 #include <QSet>
 #include <QShowEvent>
+#include <QThread>
 #include <QTimer>
 #include <QTreeWidget>
 
@@ -53,6 +58,9 @@ private slots:
     void on_btnOpenCamera_clicked();
     void on_btnRobotWeld_clicked();
     void onCameraPointCloudReady(CloudRGB::Ptr newCloud);
+    void onCameraLinkStateChanged(HikCameraWorker::State state,
+        const QString& detail);
+    void onCameraCaptureFailed(const QString& errorMessage);
     void onPointCloudLoadFinished(CloudRGB::Ptr cloud, double diagonal);
     void onPointCloudLoadFailed(QString errorMessage);
     void onPointCloudLoadBusyChanged(bool busy);
@@ -64,6 +72,8 @@ private slots:
 
     void on_btnNewSeam_clicked();
     void on_btnMapSeam_clicked();
+    void on_btnSeamStart_clicked();
+    void on_btnSeamReverse_clicked();
     void on_btnCancel_clicked();
     void on_btnDeleteSeam_clicked();
     void on_btnAckAlarm_clicked();
@@ -72,13 +82,40 @@ private slots:
         QTreeWidgetItem* current, QTreeWidgetItem* previous);
     void updatePCLWindow();
 
+    void onCameraConnectAction();
+    void onCameraDisconnectAction();
+    void onCameraDeviceInfo();
+    void onCommSelfCheck();
+
+    void onRobotLinkStateChanged(RobotWorker::State state,
+        const QString& detail);
+    void onRobotTelemetryUpdated(RobotTelemetry telemetry);
+    void onRobotFault(const QString& message);
+    void onRobotConnectAction();
+    void onRobotDisconnectAction();
+    void onRobotStatusInfo();
+    void onRobotResetFault();
+
 private:
-    enum State { STATE_IDLE, STATE_PICK_FACE_A, STATE_PICK_FACE_B };
+    enum State { STATE_IDLE, STATE_PICK_FACE_A, STATE_PICK_FACE_B,
+                 STATE_PICK_SEAM_START };
 
     Ui::dianyunClass* ui = nullptr;
+    QThread* m_cameraThread = nullptr;
     HikCameraWorker* m_cameraWorker = nullptr;
+    QThread* m_robotThread = nullptr;
+    RobotWorker* m_robotWorker = nullptr;
     ModelMatchController* m_matchController = nullptr;
     PointCloudLoadController* m_pointCloudLoadController = nullptr;
+    DeviceIndicator* m_cameraIndicator = nullptr;
+    DeviceIndicator* m_robotIndicator = nullptr;
+    QAction* m_actCameraConnect = nullptr;
+    QAction* m_actCameraDisconnect = nullptr;
+    QAction* m_actCameraInfo = nullptr;
+    QAction* m_actRobotConnect = nullptr;
+    QAction* m_actRobotDisconnect = nullptr;
+    QAction* m_actRobotStatus = nullptr;
+    QAction* m_actRobotResetFault = nullptr;
 
     StepModelLoader m_stepModelLoader;
     WeldSeamService m_weldSeamService;
@@ -96,6 +133,9 @@ private:
     QTimer* m_renderTimer = nullptr;
 
     State m_state = STATE_IDLE;
+    DeviceLinkState m_cameraState = DeviceLinkState::Offline;
+    DeviceLinkState m_robotState = DeviceLinkState::Offline;
+    RobotTelemetry m_robotTelemetry;
     int m_seamCounter = 0;
     int m_selectedFaceA = -1;
     int m_selectedFaceB = -1;
@@ -117,6 +157,9 @@ private:
     void initializeViewers();
     void fitToAvailableScreen();
     void setupThemeAssets();
+    void setupDeviceIndicators();
+    void setupCameraWorker();
+    void setupRobotWorker();
     void setupSplitters();
     void applyInitialSplitSizes();
     void setupMenuAndShortcuts();
@@ -138,10 +181,18 @@ private:
     void appendLog(const QString& message, LogLevel level);
 
     void syncSeamRowMapping(const std::string& seamId);
+    void refreshSeamRow(const WeldSeamData& seam);
+    void refreshMappedSeam(const std::string& seamId);
+    bool rebuildMappedSeam(
+        const std::string& seamId, QString& errorMessage);
+    WeldSeamData* findSeam(const std::string& seamId);
     void resetSeamSelection();
     void clearSeams();
     void clearMappedSeamResults();
     void createSelectedSeam();
+    void applySeamStart(const Eigen::Vector3f& anchor);
+    void replaceSeamGeometry(
+        const std::string& seamId, const WeldSeamData& updated);
     const WeldSeamData* selectedSeam() const;
     void invalidateMatchResult();
     void updateActionStates();

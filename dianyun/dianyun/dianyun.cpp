@@ -28,6 +28,22 @@
 
 #include <algorithm>
 
+namespace {
+
+QString deviceStateName(DeviceLinkState state)
+{
+    switch (state) {
+    case DeviceLinkState::Offline:    return QString::fromUtf8("未连接");
+    case DeviceLinkState::Connecting: return QString::fromUtf8("连接中");
+    case DeviceLinkState::Online:     return QString::fromUtf8("已连接");
+    case DeviceLinkState::Busy:       return QString::fromUtf8("运行中");
+    case DeviceLinkState::Fault:      return QString::fromUtf8("故障");
+    }
+    return QString();
+}
+
+} // namespace
+
 dianyun::dianyun(QWidget* parent)
     : QMainWindow(parent), ui(new Ui::dianyunClass)
 {
@@ -47,8 +63,13 @@ dianyun::dianyun(QWidget* parent)
     qRegisterMetaType<CloudRGB::Ptr>("CloudRGB::Ptr");
     qRegisterMetaType<Eigen::Matrix4f>("Eigen::Matrix4f");
     qRegisterMetaType<MatchResult>("MatchResult");
+    // 相机状态在 worker 线程产生，跨线程回传需要注册
+    qRegisterMetaType<HikCameraWorker::State>("HikCameraWorker::State");
+    qRegisterMetaType<RobotWorker::State>("RobotWorker::State");
+    qRegisterMetaType<RobotTelemetry>("RobotTelemetry");
 
     setupThemeAssets();
+    setupDeviceIndicators();
     setupSplitters();
     setupMenuAndShortcuts();
     initStatusBar();
@@ -85,6 +106,9 @@ dianyun::dianyun(QWidget* parent)
     connect(m_pointCloudLoadController, &PointCloudLoadController::busyChanged,
         this, &dianyun::onPointCloudLoadBusyChanged);
 
+    setupCameraWorker();
+    setupRobotWorker();
+
     updateStatusUI();
     resetMatchCard();
     updateActionStates();
@@ -95,6 +119,39 @@ dianyun::dianyun(QWidget* parent)
 
 dianyun::~dianyun()
 {
+    // 先让相机线程收尾，再释放 UI 与其它控制器
+    if (m_cameraThread) {
+        if (m_cameraWorker && m_cameraThread->isRunning()) {
+            HikCameraWorker* worker = m_cameraWorker;
+            QMetaObject::invokeMethod(worker,
+                [worker]() { worker->disconnectCamera(); },
+                Qt::BlockingQueuedConnection);
+        }
+        m_cameraThread->quit();
+        if (!m_cameraThread->wait(5000)) {
+            appendLog(QString::fromUtf8("相机线程未能在 5 秒内退出。"),
+                LogLevel::Warning);
+        }
+        m_cameraWorker = nullptr;   // 随线程 finished 信号 deleteLater 释放
+        m_cameraThread = nullptr;   // QThread 以 this 为 parent，随后统一析构
+    }
+
+    if (m_robotThread) {
+        if (m_robotWorker && m_robotThread->isRunning()) {
+            RobotWorker* worker = m_robotWorker;
+            QMetaObject::invokeMethod(worker,
+                [worker]() { worker->disconnectRobot(); },
+                Qt::BlockingQueuedConnection);
+        }
+        m_robotThread->quit();
+        if (!m_robotThread->wait(5000)) {
+            appendLog(QString::fromUtf8("机械臂线程未能在 5 秒内退出。"),
+                LogLevel::Warning);
+        }
+        m_robotWorker = nullptr;
+        m_robotThread = nullptr;
+    }
+
     delete m_pointCloudLoadController;
     m_pointCloudLoadController = nullptr;
     delete m_matchController;
@@ -161,13 +218,12 @@ void dianyun::fitToAvailableScreen()
 
 void dianyun::setupThemeAssets()
 {
+    // 相机与机械臂按钮的图标由 DeviceIndicator 按状态着色，此处不再设置
     struct IconSpec { QToolButton* button; const char* path; };
     const IconSpec icons[] = {
         { ui->btnOpen,       ":/dianyun/icons/import-cad.svg"   },
         { ui->btnOpen_2,     ":/dianyun/icons/import-cloud.svg" },
         { ui->btnOpen_3,     ":/dianyun/icons/match.svg"        },
-        { ui->btnOpenCamera, ":/dianyun/icons/camera.svg"       },
-        { ui->btnRobotWeld,  ":/dianyun/icons/robot-arm.svg"    },
         { ui->btnFitView,    ":/dianyun/icons/fit-view.svg"     },
     };
 
@@ -186,6 +242,61 @@ void dianyun::setupThemeAssets()
             spec.button->setIcon(icon);
         }
     }
+}
+
+void dianyun::setupDeviceIndicators()
+{
+    m_cameraIndicator = new DeviceIndicator(ui->btnOpenCamera, ui->ledCapture,
+        QStringLiteral(":/dianyun/icons/camera.svg"),
+        QString::fromUtf8("连接相机"),
+        QString::fromUtf8("开始拍摄"),
+        QString::fromUtf8("停止拍摄"),
+        this);
+
+    m_robotIndicator = new DeviceIndicator(ui->btnRobotWeld, ui->ledRobotWeld,
+        QStringLiteral(":/dianyun/icons/robot-arm.svg"),
+        QString::fromUtf8("连接机械臂"),
+        QString::fromUtf8("机械臂就绪"),
+        QString::fromUtf8("机械臂运行"),
+        this);
+}
+
+void dianyun::setupCameraWorker()
+{
+    m_cameraThread = new QThread(this);
+    m_cameraWorker = new HikCameraWorker;   // 无 parent，随线程 finished 释放
+    m_cameraWorker->moveToThread(m_cameraThread);
+
+    connect(m_cameraThread, &QThread::finished,
+        m_cameraWorker, &QObject::deleteLater);
+    connect(m_cameraWorker, &HikCameraWorker::linkStateChanged,
+        this, &dianyun::onCameraLinkStateChanged);
+    connect(m_cameraWorker, &HikCameraWorker::pointCloudReady,
+        this, &dianyun::onCameraPointCloudReady);
+    connect(m_cameraWorker, &HikCameraWorker::captureFailed,
+        this, &dianyun::onCameraCaptureFailed);
+    connect(m_cameraWorker, &HikCameraWorker::captureFinished,
+        this, [this]() { updateActionStates(); });
+
+    m_cameraThread->start();
+}
+
+void dianyun::setupRobotWorker()
+{
+    m_robotThread = new QThread(this);
+    m_robotWorker = new RobotWorker;   // 无 parent，随线程 finished 释放
+    m_robotWorker->moveToThread(m_robotThread);
+
+    connect(m_robotThread, &QThread::finished,
+        m_robotWorker, &QObject::deleteLater);
+    connect(m_robotWorker, &RobotWorker::linkStateChanged,
+        this, &dianyun::onRobotLinkStateChanged);
+    connect(m_robotWorker, &RobotWorker::telemetryUpdated,
+        this, &dianyun::onRobotTelemetryUpdated);
+    connect(m_robotWorker, &RobotWorker::faultRaised,
+        this, &dianyun::onRobotFault);
+
+    m_robotThread->start();
 }
 
 void dianyun::setupSplitters()
@@ -254,6 +365,39 @@ void dianyun::setupMenuAndShortcuts()
     QMenu* viewMenu = ui->menuBar->addMenu(QString::fromUtf8("视图"));
     viewMenu->addAction(QString::fromUtf8("视图复位"),
         QKeySequence(Qt::Key_F5), this, &dianyun::on_btnFitView_clicked);
+
+    QMenu* commMenu = ui->menuBar->addMenu(QString::fromUtf8("通信"));
+    m_actCameraConnect = commMenu->addAction(
+        QString::fromUtf8("连接相机"),
+        QKeySequence(QStringLiteral("Ctrl+Shift+C")),
+        this, &dianyun::onCameraConnectAction);
+    m_actCameraDisconnect = commMenu->addAction(
+        QString::fromUtf8("断开相机"),
+        QKeySequence(QStringLiteral("Ctrl+Shift+X")),
+        this, &dianyun::onCameraDisconnectAction);
+    m_actCameraInfo = commMenu->addAction(
+        QString::fromUtf8("相机设备信息"),
+        this, &dianyun::onCameraDeviceInfo);
+    commMenu->addSeparator();
+
+    QMenu* robotMenu = commMenu->addMenu(QString::fromUtf8("机械臂"));
+    m_actRobotConnect = robotMenu->addAction(
+        QString::fromUtf8("连接机械臂"),
+        this, &dianyun::onRobotConnectAction);
+    m_actRobotDisconnect = robotMenu->addAction(
+        QString::fromUtf8("断开机械臂"),
+        this, &dianyun::onRobotDisconnectAction);
+    m_actRobotStatus = robotMenu->addAction(
+        QString::fromUtf8("机器人状态"),
+        this, &dianyun::onRobotStatusInfo);
+    m_actRobotResetFault = robotMenu->addAction(
+        QString::fromUtf8("清除报警"),
+        this, &dianyun::onRobotResetFault);
+
+    commMenu->addSeparator();
+    commMenu->addAction(QString::fromUtf8("通信自检"),
+        QKeySequence(QStringLiteral("Ctrl+Shift+D")),
+        this, &dianyun::onCommSelfCheck);
 
     QMenu* helpMenu = ui->menuBar->addMenu(QString::fromUtf8("帮助"));
     helpMenu->addAction(QString::fromUtf8("操作说明"), this, [this]() {
@@ -517,6 +661,105 @@ void dianyun::syncSeamRowMapping(const std::string& seamId)
     }
 }
 
+void dianyun::refreshSeamRow(const WeldSeamData& seam)
+{
+    if (!ui->listWeldSeams) return;
+    for (int i = 0; i < ui->listWeldSeams->topLevelItemCount(); ++i) {
+        QTreeWidgetItem* item = ui->listWeldSeams->topLevelItem(i);
+        if (item->data(0, Qt::UserRole).toString().toStdString() != seam.id) {
+            continue;
+        }
+
+        item->setText(0, (seam.hasStart
+            ? QString::fromUtf8("▶ ") : QString()) + seam.name);
+        item->setText(1, QString::number(seam.length, 'f', 1));
+        item->setText(2, QStringLiteral("A%1·B%2")
+            .arg(seam.faceA + 1).arg(seam.faceB + 1));
+        const bool mapped = m_mappedSeams.count(seam.id) > 0;
+        item->setText(3, mapped
+            ? QString::fromUtf8("●") : QString::fromUtf8("○"));
+        item->setForeground(3, QBrush(mapped
+            ? QColor(0x2A, 0xC4, 0x4E) : QColor(0x4A, 0x4A, 0x50)));
+
+        if (seam.hasStart && seam.points && !seam.points->empty()) {
+            const Eigen::Vector3f start =
+                seam.points->front().getVector3fMap();
+            item->setToolTip(0, QString::fromUtf8(
+                "起点 (%1, %2, %3)").arg(start.x(), 0, 'f', 2)
+                .arg(start.y(), 0, 'f', 2).arg(start.z(), 0, 'f', 2));
+        }
+        else {
+            item->setToolTip(0, QString::fromUtf8("未设定起焊方向"));
+        }
+        break;
+    }
+}
+
+WeldSeamData* dianyun::findSeam(const std::string& seamId)
+{
+    const auto seam = std::find_if(
+        m_seams.begin(), m_seams.end(),
+        [&seamId](const WeldSeamData& candidate) {
+            return candidate.id == seamId;
+        });
+    return seam == m_seams.end() ? nullptr : &(*seam);
+}
+
+void dianyun::refreshMappedSeam(const std::string& seamId)
+{
+    // 只有此前已映射过的焊缝才重建，避免改动起点时顺手生成新映射。
+    if (m_mappedSeams.count(seamId) == 0) return;
+
+    QString errorMessage;
+    if (!rebuildMappedSeam(seamId, errorMessage) &&
+        !errorMessage.isEmpty()) {
+        appendLog(QString::fromUtf8("焊缝映射更新失败：") + errorMessage,
+            LogLevel::Warning);
+    }
+}
+
+bool dianyun::rebuildMappedSeam(
+    const std::string& seamId, QString& errorMessage)
+{
+    errorMessage.clear();
+    const WeldSeamData* seam = findSeam(seamId);
+    if (!seam) {
+        errorMessage = QString::fromUtf8("焊缝已不存在。");
+        return false;
+    }
+
+    // 只有当前匹配结果可用时才重建映射，否则静默清除旧结果等待重新匹配。
+    if (!m_lastMatchResult.success ||
+        m_lastMatchResult.verdict != MatchVerdict::Pass) {
+        m_visualization.removeMappedSeam(seamId);
+        m_visualization.removeSeamStart(seamId, true);
+        m_mappedSeams.erase(seamId);
+        errorMessage.clear();
+        return false;
+    }
+
+    WeldSeamData mappedSeam;
+    if (!m_weldSeamService.mapSeam(
+        *seam, m_lastMatchResult.T_final, mappedSeam, errorMessage)) {
+        m_visualization.removeMappedSeam(seamId);
+        m_visualization.removeSeamStart(seamId, true);
+        m_mappedSeams.erase(seamId);
+        return false;
+    }
+
+    m_mappedSeams.insert_or_assign(seamId, mappedSeam);
+    m_visualization.showMappedSeam(mappedSeam);
+    // 映射结果与 CAD 侧共用起点，但坐标已变换到点云坐标系。
+    if (mappedSeam.hasStart) {
+        m_visualization.showSeamStart(mappedSeam, true);
+    }
+    else {
+        m_visualization.removeSeamStart(seamId, true);
+    }
+    syncSeamRowMapping(seamId);
+    return true;
+}
+
 void dianyun::appendLog(const QString& message)
 {
     appendLog(message, LogLevel::Normal);
@@ -561,8 +804,12 @@ void dianyun::updateStatusUI()
         status = QString::fromUtf8("请选择面 A（按住 Ctrl 单击）");
         tone = AlarmLevel::Warning;
     }
-    else {
+    else if (m_state == STATE_PICK_FACE_B) {
         status = QString::fromUtf8("请选择面 B（按住 Ctrl 单击）");
+        tone = AlarmLevel::Warning;
+    }
+    else {
+        status = QString::fromUtf8("请按住 Ctrl 单击焊缝起点端");
         tone = AlarmLevel::Warning;
     }
     setStatusText(status, tone);
@@ -595,6 +842,9 @@ void dianyun::clearSeams()
 
 void dianyun::clearMappedSeamResults()
 {
+    for (const auto& entry : m_mappedSeams) {
+        m_visualization.removeSeamStart(entry.first, true);
+    }
     m_visualization.clearMappedSeams();
     m_mappedSeams.clear();
     updateActionStates();
@@ -632,13 +882,15 @@ void dianyun::updateActionStates()
         m_pointCloudLoadController->isRunning();
     const bool cameraCapturing = m_cameraWorker &&
         m_cameraWorker->isCapturing();
+    // 采集期间禁止其它数据操作，但相机按钮自身必须保持可点击（用于停止）
     const bool dataActionsEnabled =
         !matchRunning && !cloudLoading && !cameraCapturing;
+    const bool cameraButtonEnabled = !matchRunning && !cloudLoading;
 
     if (ui->btnOpen) ui->btnOpen->setEnabled(dataActionsEnabled);
     if (ui->btnOpen_2) ui->btnOpen_2->setEnabled(dataActionsEnabled);
     if (ui->btnOpenCamera) {
-        ui->btnOpenCamera->setEnabled(dataActionsEnabled);
+        ui->btnOpenCamera->setEnabled(cameraButtonEnabled);
     }
     if (ui->btnOpen_3) {
         ui->btnOpen_3->setEnabled(dataActionsEnabled &&
@@ -649,6 +901,42 @@ void dianyun::updateActionStates()
         ui->btnMapSeam->setEnabled(dataActionsEnabled &&
             selectedSeam() && m_lastMatchResult.success &&
             m_lastMatchResult.verdict == MatchVerdict::Pass);
+    }
+    const bool seamSelected = dataActionsEnabled && selectedSeam() != nullptr;
+    if (ui->btnSeamStart) {
+        ui->btnSeamStart->setEnabled(seamSelected);
+    }
+    if (ui->btnSeamReverse) {
+        ui->btnSeamReverse->setEnabled(seamSelected);
+    }
+
+    // 故障态也允许断开，用于把链路复位回未连接
+    const bool cameraOffline = m_cameraState == DeviceLinkState::Offline;
+    if (m_actCameraConnect) {
+        m_actCameraConnect->setEnabled(cameraOffline ||
+            m_cameraState == DeviceLinkState::Fault);
+    }
+    if (m_actCameraDisconnect) {
+        m_actCameraDisconnect->setEnabled(!cameraOffline);
+    }
+    if (m_actCameraInfo) {
+        m_actCameraInfo->setEnabled(m_cameraWorker != nullptr);
+    }
+
+    const bool robotOffline = m_robotState == DeviceLinkState::Offline;
+    if (m_actRobotConnect) {
+        m_actRobotConnect->setEnabled(robotOffline ||
+            m_robotState == DeviceLinkState::Fault);
+    }
+    if (m_actRobotDisconnect) {
+        m_actRobotDisconnect->setEnabled(!robotOffline);
+    }
+    if (m_actRobotStatus) {
+        m_actRobotStatus->setEnabled(m_robotWorker != nullptr);
+    }
+    if (m_actRobotResetFault) {
+        m_actRobotResetFault->setEnabled(
+            !robotOffline && m_robotState != DeviceLinkState::Connecting);
     }
 }
 
@@ -673,10 +961,26 @@ void dianyun::mouseEventOccurred(
         ->GetRenderers()->GetFirstRenderer();
     if (!renderer || picker->Pick(
         event.getX(), event.getY(), 0, renderer) == 0) {
+        if (m_state == STATE_PICK_SEAM_START) {
+            appendLog(QString::fromUtf8(
+                "未命中任何模型表面，请按住 Ctrl 单击焊缝所在位置。"),
+                LogLevel::Warning);
+        }
         return;
     }
 
     const vtkIdType cellId = picker->GetCellId();
+    if (m_state == STATE_PICK_SEAM_START) {
+        // 焊缝管道不可拾取，单击命中的是 CAD 网格，直接取其世界坐标。
+        double position[3];
+        picker->GetPickPosition(position);
+        applySeamStart(Eigen::Vector3f(
+            static_cast<float>(position[0]),
+            static_cast<float>(position[1]),
+            static_cast<float>(position[2])));
+        return;
+    }
+
     if (cellId < 0 || static_cast<size_t>(cellId) >=
         m_cadModel.cellToFaceMap.size()) {
         return;
@@ -747,6 +1051,7 @@ void dianyun::createSelectedSeam()
         item->setTextAlignment(3, Qt::AlignCenter);
         item->setData(0, Qt::UserRole, QString::fromStdString(seam.id));
         item->setForeground(3, QBrush(QColor(0x4A, 0x4A, 0x50)));
+        item->setToolTip(0, QString::fromUtf8("未设定起焊方向"));
         ui->listWeldSeams->addTopLevelItem(item);
     }
     appendLog(QString::fromUtf8("已创建%1：长度 %2，%3 个管道段。")
@@ -755,6 +1060,7 @@ void dianyun::createSelectedSeam()
         .arg(seam.segments.size()), LogLevel::Success);
     refreshDataSummary();
     resetSeamSelection();
+    updateActionStates();
 }
 
 void dianyun::on_btnOpen_clicked()
@@ -861,6 +1167,127 @@ void dianyun::on_btnCancel_clicked()
     resetSeamSelection();
 }
 
+void dianyun::on_btnSeamStart_clicked()
+{
+    const WeldSeamData* seam = selectedSeam();
+    if (!seam) {
+        appendLog(QString::fromUtf8("请先在焊缝列表中选择一条焊缝。"));
+        updateActionStates();
+        return;
+    }
+    if (!m_cadModel.isValid()) {
+        appendLog(QString::fromUtf8("请先导入三维模型。"));
+        return;
+    }
+
+    m_state = STATE_PICK_SEAM_START;
+    m_selectedFaceA = -1;
+    m_selectedFaceB = -1;
+    m_visualization.clearFaceHighlights();
+    updateStatusUI();
+    appendLog(QString::fromUtf8(
+        "设定起点：请按住 Ctrl 单击焊缝的起点端点（%）")
+        .arg(seam->name));
+}
+
+void dianyun::on_btnSeamReverse_clicked()
+{
+    const WeldSeamData* selected = selectedSeam();
+    if (!selected) {
+        appendLog(QString::fromUtf8("请先在焊缝列表中选择一条焊缝。"));
+        updateActionStates();
+        return;
+    }
+
+    WeldSeamData reversed;
+    QString errorMessage;
+    if (!m_weldSeamService.reverseDirection(
+        *selected, reversed, errorMessage)) {
+        appendLog(QString::fromUtf8("反转焊接方向失败：") + errorMessage,
+            LogLevel::Warning);
+        showAlarm(AlarmLevel::Warning,
+            QString::fromUtf8("反转焊接方向失败：") + errorMessage);
+        return;
+    }
+
+    const std::string seamId = selected->id;
+    const QString name = selected->name;
+    replaceSeamGeometry(seamId, reversed);
+    refreshMappedSeam(seamId);
+    appendLog(QString::fromUtf8("%1 焊接方向已反转，新起点 %2。")
+        .arg(name)
+        .arg(reversed.points && !reversed.points->empty()
+            ? QString::fromUtf8("(%1, %2, %3)")
+                .arg(reversed.points->front().x, 0, 'f', 2)
+                .arg(reversed.points->front().y, 0, 'f', 2)
+                .arg(reversed.points->front().z, 0, 'f', 2)
+            : QString::fromUtf8("无效")),
+        LogLevel::Success);
+}
+
+void dianyun::applySeamStart(const Eigen::Vector3f& anchor)
+{
+    if (m_state != STATE_PICK_SEAM_START) return;
+
+    const WeldSeamData* selected = selectedSeam();
+    if (!selected) {
+        appendLog(QString::fromUtf8("焊缝选择已失效，请重新选择。"),
+            LogLevel::Warning);
+        resetSeamSelection();
+        return;
+    }
+
+    const double tolerance = std::max(0.01 * m_cadModel.diagonal, 1.0);
+    WeldSeamData updated;
+    QString errorMessage;
+    if (!m_weldSeamService.setStartAt(
+        *selected, anchor, tolerance, updated, errorMessage)) {
+        appendLog(errorMessage, LogLevel::Warning);
+        showAlarm(AlarmLevel::Warning, errorMessage);
+        // 保留拾取状态，方便直接重试点击。
+        return;
+    }
+
+    const std::string seamId = selected->id;
+    const QString name = selected->name;
+    double distance = 0.0;
+    if (updated.points && !updated.points->empty()) {
+        distance = static_cast<double>(
+            (updated.points->front().getVector3fMap() - anchor).norm());
+    }
+
+    replaceSeamGeometry(seamId, updated);
+    refreshMappedSeam(seamId);
+    appendLog(QString::fromUtf8("%1 起点已设定，距点击点 %2。")
+        .arg(name).arg(distance, 0, 'f', 2), LogLevel::Success);
+    resetSeamSelection();
+}
+
+void dianyun::replaceSeamGeometry(
+    const std::string& seamId, const WeldSeamData& updated)
+{
+    WeldSeamData* seam = findSeam(seamId);
+    if (!seam) return;
+
+    const WeldSeamData previous = *seam;
+    m_visualization.removeSeam(previous);
+    m_visualization.removeMappedSeam(seamId);
+    m_mappedSeams.erase(seamId);
+
+    *seam = updated;
+    m_visualization.showSeam(*seam);
+    m_visualization.removeSeamStart(seam->id, true);
+    if (seam->hasStart) {
+        m_visualization.showSeamStart(*seam, false);
+    }
+    else {
+        m_visualization.removeSeamStart(seam->id, false);
+    }
+    refreshSeamRow(*seam);
+    refreshDataSummary();
+    updateActionStates();
+}
+
 void dianyun::on_btnMapSeam_clicked()
 {
     const WeldSeamData* seam = selectedSeam();
@@ -877,26 +1304,23 @@ void dianyun::on_btnMapSeam_clicked()
         return;
     }
 
-    WeldSeamData mappedSeam;
-    QString errorMessage;
-    if (!m_weldSeamService.mapSeam(
-        *seam, m_lastMatchResult.T_final, mappedSeam, errorMessage)) {
-        appendLog(QString::fromUtf8("焊缝映射失败：") + errorMessage,
-            LogLevel::Error);
-        showAlarm(AlarmLevel::Error,
-            QString::fromUtf8("焊缝映射失败：") + errorMessage);
+    const std::string seamId = seam->id;
+    QString mapError;
+    if (!rebuildMappedSeam(seamId, mapError)) {
+        const QString message = mapError.isEmpty()
+            ? QString::fromUtf8("焊缝映射失败：几何数据无效。")
+            : QString::fromUtf8("焊缝映射失败：") + mapError;
+        appendLog(message, LogLevel::Error);
+        showAlarm(AlarmLevel::Error, message);
         return;
     }
-
-    const std::string seamId = seam->id;
-    m_mappedSeams.insert_or_assign(seamId, mappedSeam);
-    m_visualization.showMappedSeam(mappedSeam);
+    const WeldSeamData& mappedSeam = m_mappedSeams.at(seamId);
     appendLog(QString::fromUtf8(
         "%1映射完成：%2 个采样点，%3 个管道段。")
         .arg(mappedSeam.name)
         .arg(mappedSeam.points ? mappedSeam.points->size() : 0)
-        .arg(mappedSeam.segments.size()), LogLevel::Success);
-    syncSeamRowMapping(seamId);
+        .arg(static_cast<int>(mappedSeam.segments.size())),
+        LogLevel::Success);
     refreshDataSummary();
 }
 
@@ -982,22 +1406,435 @@ void dianyun::showEvent(QShowEvent* event)
 
 void dianyun::on_btnOpenCamera_clicked()
 {
-    if (ui->ledCapture) {
-        ui->ledCapture->startBlinking(20 * 1000);
+    if (!m_cameraWorker) return;
+
+    // m_cameraState 是 UI 侧缓存，与 worker 的真实状态在每次切换后同步
+    switch (m_cameraState) {
+    case DeviceLinkState::Offline:
+    case DeviceLinkState::Fault:
+        m_cameraState = DeviceLinkState::Connecting;
+        m_cameraIndicator->setState(m_cameraState,
+            QString::fromUtf8("正在枚举并打开设备"));
+        {
+            HikCameraWorker* worker = m_cameraWorker;
+            QMetaObject::invokeMethod(worker,
+                [worker]() { worker->connectCamera(); },
+                Qt::QueuedConnection);
+        }
+        appendLog(QString::fromUtf8("正在连接相机…"), LogLevel::Info);
+        break;
+
+    case DeviceLinkState::Online:
+        {
+            HikCameraWorker* worker = m_cameraWorker;
+            QMetaObject::invokeMethod(worker, [worker]() {
+                worker->m_params.frameCount = 1;
+                worker->startCapture();
+            }, Qt::QueuedConnection);
+        }
+        break;
+
+    case DeviceLinkState::Busy:
+        {
+            HikCameraWorker* worker = m_cameraWorker;
+            QMetaObject::invokeMethod(worker,
+                [worker]() { worker->stopCapture(); },
+                Qt::QueuedConnection);
+        }
+        break;
+
+    case DeviceLinkState::Connecting:
+        // 枚举过程中重复点击直接忽略，避免并发 OpenDevice
+        break;
     }
-    appendLog(QString::fromUtf8(
-        "演示模式：相机采集尚未接入，仅触发状态指示灯。"),
-        LogLevel::Warning);
+
+    updateActionStates();
 }
 
 void dianyun::on_btnRobotWeld_clicked()
 {
-    if (ui->ledRobotWeld) {
-        ui->ledRobotWeld->startBlinking(40 * 1000);
+    if (!m_robotWorker) return;
+
+    // m_robotState 是 UI 侧缓存，与 worker 的真实状态在每次切换后同步
+    switch (m_robotState) {
+    case DeviceLinkState::Offline:
+    case DeviceLinkState::Fault:
+        m_robotState = DeviceLinkState::Connecting;
+        m_robotIndicator->setState(m_robotState,
+            QString::fromUtf8("正在连接机器人控制器"));
+        {
+            RobotWorker* worker = m_robotWorker;
+            QMetaObject::invokeMethod(worker,
+                [worker]() { worker->connectRobot(); },
+                Qt::QueuedConnection);
+        }
+        appendLog(QString::fromUtf8("正在连接机械臂…"), LogLevel::Info);
+        break;
+
+    case DeviceLinkState::Online:
+        // 当前阶段只做只读监控，主动轮询一次刷新界面
+        {
+            RobotWorker* worker = m_robotWorker;
+            QMetaObject::invokeMethod(worker,
+                [worker]() { worker->queryTelemetryOnce(); },
+                Qt::QueuedConnection);
+        }
+        appendLog(QString::fromUtf8("已刷新机器人状态。"), LogLevel::Info);
+        break;
+
+    case DeviceLinkState::Busy:
+        // 机器人正在运动，本阶段不下发任何指令，只提示
+        appendLog(QString::fromUtf8(
+            "机械臂正在运行，本阶段仅监控，不干预运动。"),
+            LogLevel::Warning);
+        break;
+
+    case DeviceLinkState::Connecting:
+        break;
     }
-    appendLog(QString::fromUtf8(
-        "演示模式：机械臂焊接尚未接入，仅触发状态指示灯。"),
-        LogLevel::Warning);
+
+    updateActionStates();
+}
+
+void dianyun::onCameraLinkStateChanged(
+    HikCameraWorker::State state, const QString& detail)
+{
+    switch (state) {
+    case HikCameraWorker::State::Disconnected:
+        m_cameraState = DeviceLinkState::Offline;
+        m_cameraIndicator->setState(m_cameraState,
+            QString::fromUtf8("未检测到设备"));
+        appendLog(QString::fromUtf8("相机已断开。"), LogLevel::Info);
+        setStatusText(QString::fromUtf8("就绪"));
+        break;
+
+    case HikCameraWorker::State::Connecting:
+        m_cameraState = DeviceLinkState::Connecting;
+        m_cameraIndicator->setState(m_cameraState,
+            QString::fromUtf8("正在枚举并打开设备"));
+        break;
+
+    case HikCameraWorker::State::Connected:
+        m_cameraState = DeviceLinkState::Online;
+        m_cameraIndicator->setState(m_cameraState,
+            QString::fromUtf8("已连接：%1（只读，未标定）").arg(detail));
+        appendLog(QString::fromUtf8("相机连接成功，SN：%1").arg(detail),
+            LogLevel::Success);
+        setStatusText(QString::fromUtf8("相机已连接"));
+        break;
+
+    case HikCameraWorker::State::Capturing:
+        m_cameraState = DeviceLinkState::Busy;
+        m_cameraIndicator->setState(m_cameraState,
+            QString::fromUtf8("采集中，可点击停止"));
+        setStatusText(QString::fromUtf8("采集中"), AlarmLevel::Warning);
+        break;
+
+    case HikCameraWorker::State::Fault:
+        m_cameraState = DeviceLinkState::Fault;
+        m_cameraIndicator->setState(m_cameraState, detail);
+        appendLog(QString::fromUtf8("相机故障：%1").arg(detail),
+            LogLevel::Error);
+        showAlarm(AlarmLevel::Error,
+            QString::fromUtf8("相机故障：") + detail);
+        setStatusText(QString::fromUtf8("相机故障"), AlarmLevel::Error);
+        break;
+    }
+
+    updateActionStates();
+}
+
+void dianyun::onCameraCaptureFailed(const QString& errorMessage)
+{
+    appendLog(QString::fromUtf8("采集失败：%1").arg(errorMessage),
+        LogLevel::Error);
+    showAlarm(AlarmLevel::Error,
+        QString::fromUtf8("采集失败：") + errorMessage);
+    setStatusText(QString::fromUtf8("采集失败"), AlarmLevel::Error);
+    updateActionStates();
+}
+
+void dianyun::onCameraConnectAction()
+{
+    if (m_cameraState == DeviceLinkState::Connecting ||
+        m_cameraState == DeviceLinkState::Online ||
+        m_cameraState == DeviceLinkState::Busy) {
+        appendLog(QString::fromUtf8("相机已连接或正在连接。"));
+        return;
+    }
+    if (!m_cameraWorker) return;
+
+    m_cameraState = DeviceLinkState::Connecting;
+    m_cameraIndicator->setState(m_cameraState,
+        QString::fromUtf8("正在枚举并打开设备"));
+    QMetaObject::invokeMethod(m_cameraWorker,
+        &HikCameraWorker::connectCamera, Qt::QueuedConnection);
+    appendLog(QString::fromUtf8("正在连接相机…"), LogLevel::Info);
+    updateActionStates();
+}
+
+void dianyun::onCameraDisconnectAction()
+{
+    if (!m_cameraWorker || m_cameraState == DeviceLinkState::Offline) {
+        appendLog(QString::fromUtf8("相机当前未连接。"));
+        return;
+    }
+    QMetaObject::invokeMethod(m_cameraWorker,
+        &HikCameraWorker::disconnectCamera, Qt::QueuedConnection);
+    updateActionStates();
+}
+
+void dianyun::onCameraDeviceInfo()
+{
+    if (!m_cameraWorker || !m_cameraThread ||
+        !m_cameraThread->isRunning()) {
+        appendLog(QString::fromUtf8("相机通信线程未运行。"),
+            LogLevel::Warning);
+        return;
+    }
+
+    // 读序列号需要在 worker 线程内完成，避免与连接流程竞争
+    QString serial;
+    QString lastError;
+    const bool ok = QMetaObject::invokeMethod(m_cameraWorker,
+        [this, &serial, &lastError]() {
+            serial = m_cameraWorker->deviceSerial();
+            lastError = m_cameraWorker->lastError();
+        }, Qt::BlockingQueuedConnection);
+    if (!ok) {
+        appendLog(QString::fromUtf8("读取相机设备信息失败。"),
+            LogLevel::Error);
+        return;
+    }
+
+    const QString info = QString::fromUtf8(
+        "状态：%1\n序列号：%2\n最近错误：%3")
+        .arg(deviceStateName(m_cameraState),
+            serial.isEmpty() ? QString::fromUtf8("（未连接）") : serial,
+            lastError.isEmpty() ? QString::fromUtf8("无") : lastError);
+    appendLog(QString::fromUtf8("相机设备信息：状态 %1，SN %2")
+        .arg(deviceStateName(m_cameraState),
+            serial.isEmpty() ? QStringLiteral("-") : serial),
+        LogLevel::Info);
+    QMessageBox::information(this, QString::fromUtf8("相机设备信息"), info);
+}
+
+void dianyun::onCommSelfCheck()
+{
+    const bool threadRunning = m_cameraThread && m_cameraThread->isRunning();
+    const bool workerAlive = m_cameraWorker != nullptr;
+    const bool robotThreadRunning = m_robotThread &&
+        m_robotThread->isRunning();
+    const bool robotAlive = m_robotWorker != nullptr;
+
+    QString report = QString::fromUtf8(
+        "相机线程：%1\n相机工作对象：%2\n相机链路：%3\n\n"
+        "机械臂线程：%4\n机械臂工作对象：%5\n机械臂链路：%6")
+        .arg(threadRunning ? QString::fromUtf8("运行中")
+                           : QString::fromUtf8("已停止"),
+             workerAlive ? QString::fromUtf8("正常")
+                         : QString::fromUtf8("未创建"),
+             deviceStateName(m_cameraState),
+             robotThreadRunning ? QString::fromUtf8("运行中")
+                                : QString::fromUtf8("已停止"),
+             robotAlive ? QString::fromUtf8("正常")
+                        : QString::fromUtf8("未创建"),
+             deviceStateName(m_robotState));
+
+    const bool allGood = threadRunning && workerAlive &&
+        robotThreadRunning && robotAlive;
+    appendLog(QString::fromUtf8("通信自检：相机 %1 / 机械臂 %2")
+        .arg(deviceStateName(m_cameraState),
+             deviceStateName(m_robotState)),
+        allGood ? LogLevel::Success : LogLevel::Warning);
+    QMessageBox::information(this, QString::fromUtf8("通信自检"), report);
+}
+
+void dianyun::onRobotLinkStateChanged(
+    RobotWorker::State state, const QString& detail)
+{
+    switch (state) {
+    case RobotWorker::State::Disconnected:
+        m_robotState = DeviceLinkState::Offline;
+        m_robotIndicator->setState(m_robotState,
+            QString::fromUtf8("未连接控制器"));
+        appendLog(QString::fromUtf8("机械臂已断开。"), LogLevel::Info);
+        break;
+
+    case RobotWorker::State::Connecting:
+        m_robotState = DeviceLinkState::Connecting;
+        m_robotIndicator->setState(m_robotState,
+            QString::fromUtf8("正在连接机器人控制器"));
+        break;
+
+    case RobotWorker::State::Online:
+        m_robotState = DeviceLinkState::Online;
+        m_robotIndicator->setState(m_robotState,
+            QString::fromUtf8("已连接：%1（只读，未标定）")
+                .arg(detail.isEmpty()
+                    ? m_robotWorker->controllerIp() : detail));
+        appendLog(QString::fromUtf8("机械臂连接成功。"), LogLevel::Success);
+        setStatusText(QString::fromUtf8("机械臂已就绪"));
+        break;
+
+    case RobotWorker::State::Busy:
+        m_robotState = DeviceLinkState::Busy;
+        m_robotIndicator->setState(m_robotState,
+            QString::fromUtf8("机器人运动中（%1），本阶段只读监控")
+                .arg(detail));
+        setStatusText(QString::fromUtf8("机械臂运行中"), AlarmLevel::Warning);
+        break;
+
+    case RobotWorker::State::Fault:
+        m_robotState = DeviceLinkState::Fault;
+        m_robotIndicator->setState(m_robotState, detail);
+        appendLog(QString::fromUtf8("机械臂故障：%1").arg(detail),
+            LogLevel::Error);
+        setStatusText(QString::fromUtf8("机械臂故障"), AlarmLevel::Error);
+        break;
+    }
+
+    updateActionStates();
+}
+
+void dianyun::onRobotTelemetryUpdated(RobotTelemetry telemetry)
+{
+    m_robotTelemetry = telemetry;
+}
+
+void dianyun::onRobotFault(const QString& message)
+{
+    showAlarm(AlarmLevel::Error,
+        QString::fromUtf8("机械臂：") + message);
+}
+
+void dianyun::onRobotConnectAction()
+{
+    if (!m_robotWorker) return;
+    if (m_robotState == DeviceLinkState::Connecting ||
+        m_robotState == DeviceLinkState::Online ||
+        m_robotState == DeviceLinkState::Busy) {
+        appendLog(QString::fromUtf8("机械臂已连接或正在连接。"));
+        return;
+    }
+
+    m_robotState = DeviceLinkState::Connecting;
+    m_robotIndicator->setState(m_robotState,
+        QString::fromUtf8("正在连接机器人控制器"));
+    RobotWorker* worker = m_robotWorker;
+    QMetaObject::invokeMethod(worker,
+        [worker]() { worker->connectRobot(); }, Qt::QueuedConnection);
+    appendLog(QString::fromUtf8("正在连接机械臂…"), LogLevel::Info);
+    updateActionStates();
+}
+
+void dianyun::onRobotDisconnectAction()
+{
+    if (!m_robotWorker || m_robotState == DeviceLinkState::Offline) {
+        appendLog(QString::fromUtf8("机械臂当前未连接。"));
+        return;
+    }
+    RobotWorker* worker = m_robotWorker;
+    QMetaObject::invokeMethod(worker,
+        [worker]() { worker->disconnectRobot(); }, Qt::QueuedConnection);
+    updateActionStates();
+}
+
+void dianyun::onRobotStatusInfo()
+{
+    if (!m_robotWorker || !m_robotThread ||
+        !m_robotThread->isRunning()) {
+        appendLog(QString::fromUtf8("机械臂通信线程未运行。"),
+            LogLevel::Warning);
+        return;
+    }
+
+    // 遥测缓存由 worker 持有，读一次快照避免与轮询竞争
+    RobotTelemetry telemetry;
+    const bool ok = QMetaObject::invokeMethod(m_robotWorker,
+        [this, &telemetry]() {
+            telemetry = m_robotWorker->currentTelemetry();
+        }, Qt::BlockingQueuedConnection);
+    if (!ok) {
+        appendLog(QString::fromUtf8("读取机器人状态失败。"), LogLevel::Error);
+        return;
+    }
+
+    if (!telemetry.connected) {
+        appendLog(QString::fromUtf8("机器人未连接，无实时状态。"),
+            LogLevel::Warning);
+        QMessageBox::information(this, QString::fromUtf8("机器人状态"),
+            QString::fromUtf8("机器人未连接。"));
+        return;
+    }
+
+    static const char* const kStateName[] = {
+        "未知", "停止", "运行", "暂停", "拖动" };
+    const int stateIndex = (telemetry.robotState >= 0 &&
+        telemetry.robotState <= 4) ? telemetry.robotState : 0;
+    const int modeIndex = telemetry.robotMode == 0 ? 0
+        : (telemetry.robotMode == 1 ? 1 : -1);
+
+    const QString info = QString::fromUtf8(
+        "控制器：%1\n"
+        "运动状态：%2\n"
+        "程序状态：%3\n"
+        "手自动：%4\n"
+        "到位信号：%5\n"
+        "急停：%6\n"
+        "故障码：%7 / %8\n"
+        "RPC 耗时：%9 ms\n\n"
+        "TCP 位姿：X %10  Y %11  Z %12\n"
+        "          RX %13  RY %14  RZ %15")
+        .arg(m_robotWorker->controllerIp(),
+            QString::fromUtf8(kStateName[stateIndex]),
+            telemetry.programState == 2
+                ? QString::fromUtf8("运行")
+                : QString::fromUtf8("停止/暂停"),
+            modeIndex == 0 ? QString::fromUtf8("自动")
+                : (modeIndex == 1 ? QString::fromUtf8("手动")
+                                  : QString::fromUtf8("未知")),
+            telemetry.motionDone ? QString::fromUtf8("已到位")
+                                 : QString::fromUtf8("未到位"),
+            telemetry.emergencyStop ? QString::fromUtf8("已按下")
+                                    : QString::fromUtf8("未按下"),
+            QString::number(telemetry.mainCode),
+            QString::number(telemetry.subCode),
+            QString::number(telemetry.rpcLatencyMs),
+            QString::number(telemetry.tcpPose[0], 'f', 2),
+            QString::number(telemetry.tcpPose[1], 'f', 2),
+            QString::number(telemetry.tcpPose[2], 'f', 2),
+            QString::number(telemetry.tcpPose[3], 'f', 2),
+            QString::number(telemetry.tcpPose[4], 'f', 2),
+            QString::number(telemetry.tcpPose[5], 'f', 2));
+
+    appendLog(QString::fromUtf8("机器人状态：%1，RPC %2 ms")
+        .arg(QString::fromUtf8(kStateName[stateIndex]),
+             QString::number(telemetry.rpcLatencyMs)),
+        LogLevel::Info);
+    QMessageBox::information(this, QString::fromUtf8("机器人状态"), info);
+}
+
+void dianyun::onRobotResetFault()
+{
+    if (!m_robotWorker || m_robotState == DeviceLinkState::Offline) {
+        appendLog(QString::fromUtf8("机械臂未连接，无法清除报警。"),
+            LogLevel::Warning);
+        return;
+    }
+
+    const auto answer = QMessageBox::question(this,
+        QString::fromUtf8("清除报警"),
+        QString::fromUtf8(
+            "确认清除机器人控制器上的所有报警？\n"
+            "该操作不涉及任何运动指令，但会复位控制器故障状态。"),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) return;
+
+    RobotWorker* worker = m_robotWorker;
+    QMetaObject::invokeMethod(worker,
+        [worker]() { worker->resetFault(); }, Qt::QueuedConnection);
+    appendLog(QString::fromUtf8("已请求清除机器人报警。"), LogLevel::Info);
 }
 
 void dianyun::onCameraPointCloudReady(CloudRGB::Ptr newCloud)

@@ -5,6 +5,7 @@
 
 #include <vtkActor.h>
 #include <vtkCellArray.h>
+#include <vtkLeaderActor2D.h>
 #include <vtkPoints.h>
 #include <vtkPolyData.h>
 #include <vtkPolyLine.h>
@@ -38,6 +39,13 @@ std::string VisualizationManager::seamActorId(const std::string& seamId)
 std::string VisualizationManager::mappedSeamActorId(const std::string& seamId)
 {
     return "mapped_seam_tube_" + seamId;
+}
+
+std::string VisualizationManager::seamStartActorId(
+    const std::string& seamId, bool scanView)
+{
+    return std::string(scanView ? "scan_seam_start_" : "cad_seam_start_")
+        + seamId;
 }
 
 void VisualizationManager::setSeamActorAppearance(
@@ -366,6 +374,8 @@ void VisualizationManager::showSeam(const WeldSeamData& seam)
 
 void VisualizationManager::removeSeam(const WeldSeamData& seam)
 {
+    removeSeamStart(seam.id, false);
+    removeSeamStart(seam.id, true);
     if (!m_cadViewer) return;
     m_cadViewer->removeShape(seamActorId(seam.id));
     m_cadViewer->spinOnce(20, true);
@@ -410,6 +420,94 @@ void VisualizationManager::clearMappedSeams()
         }
     }
     m_mappedSeamActorIds.clear();
+}
+
+void VisualizationManager::showSeamStart(
+    const WeldSeamData& seam, bool scanView)
+{
+    const ViewerPtr& viewer = scanView ? m_scanViewer : m_cadViewer;
+    if (!viewer || !seam.points || seam.points->size() < 2 ||
+        seam.segments.empty()) {
+        return;
+    }
+
+    const Eigen::Vector3f start = seam.points->front().getVector3fMap();
+    if (!start.allFinite()) return;
+
+    // 方向取首个非退化线段的位移，避免采样点过密导致箭头抖动。
+    Eigen::Vector3f direction = Eigen::Vector3f::Zero();
+    for (const auto& segment : seam.segments) {
+        const Eigen::Vector3f delta = segment.end - segment.start;
+        if (delta.squaredNorm() > 1e-12f) {
+            direction = delta.normalized();
+            break;
+        }
+    }
+    if (direction.isZero()) return;
+
+    double scale = scanView ? m_scanDiagonal : m_cadDiagonal;
+    if (!std::isfinite(scale) || scale <= 0.0) {
+        Eigen::Vector3f minimum = start;
+        Eigen::Vector3f maximum = start;
+        for (const auto& point : seam.points->points) {
+            const Eigen::Vector3f position = point.getVector3fMap();
+            if (!position.allFinite()) continue;
+            minimum = minimum.cwiseMin(position);
+            maximum = maximum.cwiseMax(position);
+        }
+        scale = static_cast<double>((maximum - minimum).norm());
+    }
+    if (!std::isfinite(scale) || scale <= 0.0) scale = 1.0;
+
+    const double radius = std::max(scale * 0.004, 1e-3);
+    const double arrowLength = std::max(scale * 0.05, 1e-3);
+
+    const std::string base = seamStartActorId(seam.id, scanView);
+    const std::string sphereId = base + "_sphere";
+    const std::string arrowId = base + "_arrow";
+
+    viewer->removeShape(sphereId);
+    viewer->removeShape(arrowId);
+
+    pcl::PointXYZ center;
+    center.x = start.x();
+    center.y = start.y();
+    center.z = start.z();
+
+    pcl::PointXYZ tail;
+    tail.x = start.x() + direction.x() * static_cast<float>(arrowLength);
+    tail.y = start.y() + direction.y() * static_cast<float>(arrowLength);
+    tail.z = start.z() + direction.z() * static_cast<float>(arrowLength);
+
+    // 起点球标：青色，与绿色焊缝和橙色映射结果区分开。
+    viewer->addSphere(center, radius, 0.1, 0.9, 1.0, sphereId);
+    // 箭头由起点指向焊接前进方向，箭头位于远端。
+    if (viewer->addArrow(center, tail, 0.1, 0.9, 1.0, false, arrowId)) {
+        auto arrow = viewer->getShapeActorMap()->find(arrowId);
+        if (arrow != viewer->getShapeActorMap()->end()) {
+            if (auto* leader = vtkLeaderActor2D::SafeDownCast(arrow->second)) {
+                leader->SetArrowPlacementToPoint2();
+            }
+            arrow->second->SetPickable(0);
+        }
+    }
+
+    auto sphere = viewer->getShapeActorMap()->find(sphereId);
+    if (sphere != viewer->getShapeActorMap()->end()) {
+        sphere->second->SetPickable(0);
+    }
+    viewer->spinOnce(30, true);
+}
+
+void VisualizationManager::removeSeamStart(
+    const std::string& seamId, bool scanView)
+{
+    const ViewerPtr& viewer = scanView ? m_scanViewer : m_cadViewer;
+    if (!viewer) return;
+    const std::string base = seamStartActorId(seamId, scanView);
+    viewer->removeShape(base + "_sphere");
+    viewer->removeShape(base + "_arrow");
+    viewer->spinOnce(20, true);
 }
 
 void VisualizationManager::selectSeam(const std::string& seamId)
