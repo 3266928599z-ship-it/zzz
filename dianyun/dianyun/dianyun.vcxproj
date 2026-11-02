@@ -183,4 +183,14 @@
   </ImportGroup>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
+  <!-- vcpkg 的 applocal 会在构建后把 vcpkg 里的 Qt(6.10.0) 拷进 OutDir，
+       且不部署 Qt 插件；这与工程实际链接的 Qt 6.10.1 不一致，运行时会报
+       "no Qt platform plugin could be initialized"。这里在 Build 之后
+       用 windeployqt 强制重新部署同版本 Qt 与插件，覆盖 applocal 的结果。
+       必须加 force 参数：vcpkg 拷入的 DLL 时间戳更新，否则会被判定为最新而跳过。 -->
+  <Target Name="DeployQtRuntime" AfterTargets="Build"
+          Condition="Exists('$(QtInstallDir)\bin\windeployqt.exe')">
+    <Exec Command="&quot;$(QtInstallDir)\bin\windeployqt.exe&quot; --force --no-translations --no-system-d3d-compiler &quot;$(TargetPath)&quot;"
+          StandardOutputImportance="low" />
+  </Target>
 </Project>
