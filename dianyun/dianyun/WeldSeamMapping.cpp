@@ -32,7 +32,6 @@ Eigen::Vector3f transformPosition(
 // 一条首尾相接的焊缝采样链，按焊接顺序排列。
 struct SeamChain {
     std::vector<Eigen::Vector3f> path;
-    double length = 0.0;
     bool closed = false;
 };
 
@@ -53,15 +52,6 @@ float connectionTolerance(const std::vector<WeldSeamSegment>& segments)
     }
     return std::max(static_cast<float>((maximum - minimum).norm()) * 1e-5f,
         kConnectionTolerance);
-}
-
-double pathLength(const std::vector<Eigen::Vector3f>& path)
-{
-    double length = 0.0;
-    for (size_t index = 1; index < path.size(); ++index) {
-        length += static_cast<double>((path[index] - path[index - 1]).norm());
-    }
-    return length;
 }
 
 std::vector<Eigen::Vector3f> reversePath(const std::vector<Eigen::Vector3f>& path)
@@ -136,16 +126,11 @@ std::vector<SeamChain> buildChains(
         if (deduped.size() < 2) continue;
         chain.closed = deduped.size() > 2 &&
             samePoint(deduped.front(), deduped.back());
-        chain.length = pathLength(deduped);
         chain.path = std::move(deduped);
         chains.push_back(std::move(chain));
     }
 
-    // 长链优先，保证主焊缝始终排在第一条，拼接顺序不再受线段输入顺序影响。
-    std::stable_sort(chains.begin(), chains.end(),
-        [](const SeamChain& left, const SeamChain& right) {
-            return left.length > right.length;
-        });
+    // 保持线段输入顺序，setStartAt 才能在此基础上显式调整链顺序。
     return chains;
 }
 
