@@ -272,7 +272,6 @@ QLabel#lblVerdict {
     font-weight: 600;
 }
 QLabel#lblVerdict[tone="pass"]   { color: #2AC44E; }
-QLabel#lblVerdict[tone="review"] { color: #F57C00; }
 QLabel#lblVerdict[tone="fail"]   { color: #E53935; }
 QLabel#lblVerdict[tone="none"]   { color: #6B6B73; }
 

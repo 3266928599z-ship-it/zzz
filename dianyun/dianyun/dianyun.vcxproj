@@ -60,7 +60,9 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros">
     <Mv3dLpRoot>$(ProjectDir)..\third_party\mv3dlp</Mv3dLpRoot>
-    <!-- fairino 只提供 vs2022 x86-64 的 Release 库，Debug 配置不启用机械臂模块 -->
+    <!-- 控制器 web 版本 v3.9.3.1，对应官方 fairino-cpp-sdk 的 tag 3.9.3
+         （SDK V2.3.3.0-robot v3.9.3）。该版本只用 20003/20004/8080，不依赖 CNDE 20005。
+         v1.x SDK 与此固件协议不匹配，MoveL / GetInverseKinRef 会解析失败。 -->
     <FairinoSdkRoot>$(ProjectDir)..\third_party\fairino-3.9.3</FairinoSdkRoot>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
@@ -92,7 +94,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/utf-8 /bigobj %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>$(VcpkgRoot)\installed\x64-windows\include\eigen3;$(VcpkgRoot)\installed\x64-windows\include\opencascade;$(VcpkgRoot)\installed\x64-windows\include\vtk-9.3;$(Mv3dLpRoot)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_UNICODE;UNICODE;%(PreprocessorDefinitions);EIGEN_DONT_VECTORIZE;EIGEN_DISABLE_UNALIGNED_ARRAY_ASSERT;NOMINMAX;_CRT_SECURE_NO_WARNINGS</PreprocessorDefinitions>
       <OpenMPSupport>true</OpenMPSupport>
@@ -147,12 +149,19 @@
     <QtMoc Include="dianyun.h" />
     <ClCompile Include="dianyun.cpp" />
     <ClCompile Include="HikCameraWorker.cpp" />
+    <ClCompile Include="ScanSession.cpp" />
+    <ClCompile Include="ScanController.cpp" />
+    <ClCompile Include="HandEyeConfig.cpp" />
+    <ClCompile Include="WeldPathPlanner.cpp" />
+    <ClCompile Include="WeldPathController.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="HikCameraWorker.h" />
     <QtMoc Include="DeviceIndicator.h" />
     <QtMoc Include="RobotWorker.h" />
+    <QtMoc Include="ScanController.h" />
+    <QtMoc Include="WeldPathController.h" />
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="ModelMatchWorker.h" />
@@ -163,6 +172,8 @@
     <ClInclude Include="QRoundLed.h" />
     <ClInclude Include="AppTypes.h" />
     <ClInclude Include="CameraCaptureState.h" />
+    <ClInclude Include="ScanTypes.h" />
+    <ClInclude Include="ScanSession.h" />
     <ClInclude Include="RobotTypes.h" />
     <ClInclude Include="MatchTypes.h" />
     <ClInclude Include="MatchRequestTracker.h" />
@@ -171,6 +182,9 @@
     <ClInclude Include="VisualizationManager.h" />
     <ClInclude Include="WeldSeamService.h" />
     <ClInclude Include="WeldTypes.h" />
+    <ClInclude Include="PoseMath.h" />
+    <ClInclude Include="HandEyeConfig.h" />
+    <ClInclude Include="WeldPathPlanner.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">

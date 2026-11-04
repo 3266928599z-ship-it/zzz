@@ -351,6 +351,45 @@ bool WeldSeamService::setStartAt(
     return true;
 }
 
+bool WeldSeamService::orderedPath(
+    const WeldSeamData& seam,
+    std::vector<Eigen::Vector3f>& path,
+    bool& closed,
+    QString& errorMessage) const
+{
+    errorMessage.clear();
+    path.clear();
+    closed = false;
+    if (seam.segments.empty()) {
+        errorMessage = QString::fromUtf8("该焊缝没有可用的几何线段。");
+        return false;
+    }
+    for (const auto& segment : seam.segments) {
+        if (!segment.start.allFinite() || !segment.end.allFinite()) {
+            errorMessage = QString::fromUtf8("焊缝线段包含无效坐标。");
+            return false;
+        }
+    }
+
+    // 段序已由 setStartAt / reverseDirection 按焊接顺序排好，
+    // buildChains 从第 0 段向后延伸，能原样恢复该顺序。
+    std::vector<SeamChain> chains =
+        buildChains(seam.segments, connectionTolerance(seam.segments));
+    if (chains.empty()) {
+        errorMessage = QString::fromUtf8("无法从焊缝线段恢复连通结构。");
+        return false;
+    }
+    if (chains.size() > 1) {
+        errorMessage = QString::fromUtf8(
+            "焊缝由 %1 段互不相连的链组成，暂不支持连续执行，请拆成单条焊缝。")
+            .arg(chains.size());
+        return false;
+    }
+    path = std::move(chains.front().path);
+    closed = chains.front().closed;
+    return true;
+}
+
 bool WeldSeamService::reverseDirection(
     const WeldSeamData& input,
     WeldSeamData& output,

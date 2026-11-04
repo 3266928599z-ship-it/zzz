@@ -12,9 +12,13 @@ struct MatchConfig {
     float ambiguityRatio = 1.10f;
     int icpMaxIterA = 50;
     int icpMaxIterB = 50;
+    // 扫描点云坐标系中朝向相机的方向。海康线激光实测离相机越近 Z 越大，故为 +Z。
+    // 基座坐标点云（CloudFrame::RobotBase）下即基座竖直向上方向；本机落地安装、
+    // 基座 +Z 朝上，两种坐标系恰好都取 UnitZ。此时 T_final 为 CAD→基座。
+    Eigen::Vector3f scanUpAxis = Eigen::Vector3f::UnitZ();
 };
 
-enum class MatchVerdict { Pass, NeedsReview, Fail };
+enum class MatchVerdict { Pass, Fail };
 
 struct MatchResult {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW

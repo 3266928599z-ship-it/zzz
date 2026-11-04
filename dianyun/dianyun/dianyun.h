@@ -7,6 +7,7 @@
 
 #include "AppTypes.h"
 #include "DeviceIndicator.h"
+#include "HandEyeConfig.h"
 #include "HikCameraWorker.h"
 #include "MatchTypes.h"
 #include "MatchRequestTracker.h"
@@ -14,8 +15,10 @@
 #include "PointCloudLoadController.h"
 #include "RobotTypes.h"
 #include "RobotWorker.h"
+#include "ScanController.h"
 #include "StepModelLoader.h"
 #include "VisualizationManager.h"
+#include "WeldPathController.h"
 #include "WeldSeamService.h"
 #include "WeldTypes.h"
 
@@ -96,6 +99,19 @@ private slots:
     void onRobotStatusInfo();
     void onRobotResetFault();
 
+    void onScanProgress(QString stage);
+    void onScanFinished(CloudRGB::Ptr cloud, CloudFrame frame);
+    void onScanFailed(QString message);
+    void onScanRequestAction();
+
+    void onReloadCalibration();
+    void onMoveAbovePickedPoint();
+    void onWeldDryRun();
+    void onWeldExecute();
+    void onPathProgress(QString message);
+    void onPathFinished();
+    void onPathFailed(QString message);
+
 private:
     enum State { STATE_IDLE, STATE_PICK_FACE_A, STATE_PICK_FACE_B,
                  STATE_PICK_SEAM_START };
@@ -105,6 +121,17 @@ private:
     HikCameraWorker* m_cameraWorker = nullptr;
     QThread* m_robotThread = nullptr;
     RobotWorker* m_robotWorker = nullptr;
+    ScanController* m_scanController = nullptr;
+    QAction* m_actScanStart = nullptr;
+    QAction* m_actScanCancel = nullptr;
+    WeldPathController* m_pathController = nullptr;
+    QAction* m_actReloadCalibration = nullptr;
+    QAction* m_actMoveAbovePick = nullptr;
+    QAction* m_actWeldDryRun = nullptr;
+    QAction* m_actWeldExecute = nullptr;
+    QAction* m_actPathCancel = nullptr;
+    HandEyeConfig m_handEye;
+    bool m_handEyeValid = false;
     ModelMatchController* m_matchController = nullptr;
     PointCloudLoadController* m_pointCloudLoadController = nullptr;
     DeviceIndicator* m_cameraIndicator = nullptr;
@@ -123,6 +150,11 @@ private:
 
     CadModelData m_cadModel;
     CloudRGB::Ptr m_scanCloud = CloudRGB::Ptr(new CloudRGB());
+    // 只有 RobotBase 点云上的匹配/焊缝结果才能下发给机械臂
+    CloudFrame m_scanCloudFrame = CloudFrame::Sensor;
+    // Shift+单击扫描视图拾取的点（与 m_scanCloud 同一坐标系）
+    bool m_havePickedPoint = false;
+    Eigen::Vector3f m_pickedPoint = Eigen::Vector3f::Zero();
     MatchResult m_lastMatchResult;
     MatchRequestTracker m_matchRequests;
     std::vector<WeldSeamData> m_seams;
@@ -136,6 +168,9 @@ private:
     DeviceLinkState m_cameraState = DeviceLinkState::Offline;
     DeviceLinkState m_robotState = DeviceLinkState::Offline;
     RobotTelemetry m_robotTelemetry;
+    // 最近一次订阅到的 TCP 位姿，用于「以当前位姿为扫描起点」
+    double m_lastTcpPose[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+    bool m_haveTcpPose = false;
     int m_seamCounter = 0;
     int m_selectedFaceA = -1;
     int m_selectedFaceB = -1;
@@ -158,9 +193,16 @@ private:
     void fitToAvailableScreen();
     void setupThemeAssets();
     void setupDeviceIndicators();
+    void setupSplitters();
     void setupCameraWorker();
     void setupRobotWorker();
-    void setupSplitters();
+    void setupScanController();
+    void setupPathController();
+    void loadHandEyeConfig();
+    // 基于当前 TCP 求调平航向；末端偏离竖直向下过多时返回 false 并记日志
+    bool levelHeading(double& headingDeg, double& tiltDeg);
+    void runSelectedSeam(bool dryRun);
+    bool robotMotionAllowed();
     void applyInitialSplitSizes();
     void setupMenuAndShortcuts();
     void initStatusBar();
@@ -199,4 +241,6 @@ private:
 
     void mouseEventOccurred(
         const pcl::visualization::MouseEvent& event, void* args);
+    void scanPointPicked(
+        const pcl::visualization::PointPickingEvent& event, void* args);
 };

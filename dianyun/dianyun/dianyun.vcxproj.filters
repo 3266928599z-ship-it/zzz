@@ -46,6 +46,12 @@
     <ClCompile Include="HikCameraWorker.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ScanSession.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ScanController.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="ModelMatchWorker.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -56,6 +62,9 @@
     <ClCompile Include="VisualizationManager.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="WeldSeamService.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="WeldSeamMapping.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="HandEyeConfig.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="WeldPathPlanner.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="WeldPathController.cpp"><Filter>Source Files</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="HikCameraWorker.h">
@@ -67,11 +76,18 @@
     <QtMoc Include="ModelMatchController.h"><Filter>Header Files</Filter></QtMoc>
     <QtMoc Include="PointCloudLoadController.h"><Filter>Header Files</Filter></QtMoc>
     <QtMoc Include="RobotWorker.h"><Filter>Header Files</Filter></QtMoc>
+    <QtMoc Include="ScanController.h"><Filter>Header Files</Filter></QtMoc>
+    <QtMoc Include="WeldPathController.h"><Filter>Header Files</Filter></QtMoc>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="QRoundLed.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="AppTypes.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="CameraCaptureState.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="ScanTypes.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="ScanSession.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="PoseMath.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="HandEyeConfig.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="WeldPathPlanner.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="RobotTypes.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="MatchTypes.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="MatchRequestTracker.h"><Filter>Header Files</Filter></ClInclude>

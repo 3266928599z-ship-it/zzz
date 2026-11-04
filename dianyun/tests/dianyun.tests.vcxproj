@@ -35,14 +35,20 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="WeldSeamMappingTests.cpp" />
+    <ClCompile Include="..\dianyun\ScanSession.cpp" />
     <ClCompile Include="..\dianyun\WeldSeamMapping.cpp" />
+    <ClCompile Include="..\dianyun\WeldPathPlanner.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\dianyun\AppTypes.h" />
     <ClInclude Include="..\dianyun\CameraCaptureState.h" />
     <ClInclude Include="..\dianyun\MatchRequestTracker.h" />
+    <ClInclude Include="..\dianyun\ScanSession.h" />
+    <ClInclude Include="..\dianyun\ScanTypes.h" />
     <ClInclude Include="..\dianyun\WeldSeamService.h" />
     <ClInclude Include="..\dianyun\WeldTypes.h" />
+    <ClInclude Include="..\dianyun\PoseMath.h" />
+    <ClInclude Include="..\dianyun\WeldPathPlanner.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

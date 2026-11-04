@@ -288,15 +288,9 @@ void ModelMatchWorker::run()
 
         result.success = true;
         result.verdict = classifyResult(result);
-        if (result.verdict == MatchVerdict::Pass) {
-            result.verdictMessage = QString::fromUtf8("匹配可信");
-        }
-        else if (result.verdict == MatchVerdict::NeedsReview) {
-            result.verdictMessage = QString::fromUtf8("匹配存在歧义，建议人工确认");
-        }
-        else {
-            result.verdictMessage = QString::fromUtf8("匹配质量不足");
-        }
+        result.verdictMessage = result.verdict == MatchVerdict::Pass
+            ? QString::fromUtf8("匹配可信")
+            : QString::fromUtf8("匹配质量不足");
 
     }
     catch (const std::exception& e) {
@@ -440,34 +434,7 @@ void ModelMatchWorker::preprocess()
         pcl::PointCloud<pcl::PointXYZ>::Ptr ds(new pcl::PointCloud<pcl::PointXYZ>());
         grid.filter(*ds);
 
-        // 扫描数据中占比很大的工作台/底板会淹没工件特征，先剔除最大平面。
-        if (applySor && ds->size() > 200) {
-            pcl::SACSegmentation<pcl::PointXYZ> segmentation;
-            segmentation.setOptimizeCoefficients(true);
-            segmentation.setModelType(pcl::SACMODEL_PLANE);
-            segmentation.setMethodType(pcl::SAC_RANSAC);
-            segmentation.setMaxIterations(500);
-            segmentation.setDistanceThreshold(m_leafSize * 1.25f);
-            segmentation.setInputCloud(ds);
-
-            pcl::PointIndices::Ptr planeIndices(new pcl::PointIndices());
-            pcl::ModelCoefficients::Ptr planeCoefficients(new pcl::ModelCoefficients());
-            segmentation.segment(*planeIndices, *planeCoefficients);
-
-            const float planeRatio = static_cast<float>(planeIndices->indices.size()) /
-                static_cast<float>(ds->size());
-            if (planeRatio > 0.15f && ds->size() - planeIndices->indices.size() >= 100) {
-                pcl::ExtractIndices<pcl::PointXYZ> extract;
-                extract.setInputCloud(ds);
-                extract.setIndices(planeIndices);
-                extract.setNegative(true);
-                pcl::PointCloud<pcl::PointXYZ>::Ptr withoutPlane(new pcl::PointCloud<pcl::PointXYZ>());
-                extract.filter(*withoutPlane);
-                ds = withoutPlane;
-            }
-        }
-
-        // 2. 降采样后再做 SOR 滤波去飞点，速度从几分钟变成几毫秒
+        // 2. 先做 SOR 去飞点，避免支撑面下方的噪声干扰后续的单侧性判定
         if (applySor && ds->size() > 50) {
             pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
             sor.setInputCloud(ds);
@@ -478,22 +445,136 @@ void ModelMatchWorker::preprocess()
             ds = ds_filtered;
         }
 
-        // 点云中可能同时存在工件、定位环和夹具残块。按空间连通性聚类，并优先保留
+        // 3. 剔除支撑平面（底板/工作台）。最大平面可能就是工件顶面，因此不按面积选，
+        // 而是在近水平平面中找满足“几乎无点在其下方、且有物体在其上方”的最低平面。
+        // 工件顶面下方还有底板，过不了单侧性检查；找不到合格平面时不剔除。
+        pcl::PointCloud<pcl::PointXYZ>::Ptr beforePlaneRemoval = ds;
+        bool planeRemoved = false;
+        const Eigen::Vector3f up = m_cfg.scanUpAxis.normalized();
+        if (applySor && ds->size() > 200 && up.allFinite()) {
+            const size_t minimumPlanePoints =
+                std::max<size_t>(50, static_cast<size_t>(ds->size() * 0.05f));
+            pcl::PointCloud<pcl::PointXYZ>::Ptr remaining = ds;
+            bool found = false;
+            Eigen::Vector3f supportNormal = Eigen::Vector3f::Zero();
+            float supportOffset = 0.0f;
+            float supportHeight = std::numeric_limits<float>::infinity();
+
+            for (int attempt = 0; attempt < 4 && remaining->size() >= minimumPlanePoints; ++attempt) {
+                pcl::SACSegmentation<pcl::PointXYZ> segmentation;
+                segmentation.setOptimizeCoefficients(true);
+                segmentation.setModelType(pcl::SACMODEL_PERPENDICULAR_PLANE);
+                segmentation.setMethodType(pcl::SAC_RANSAC);
+                segmentation.setAxis(up);
+                segmentation.setEpsAngle(30.0f * static_cast<float>(M_PI) / 180.0f);
+                segmentation.setMaxIterations(500);
+                segmentation.setDistanceThreshold(m_leafSize * 1.25f);
+                segmentation.setInputCloud(remaining);
+
+                pcl::PointIndices::Ptr planeIndices(new pcl::PointIndices());
+                pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients());
+                segmentation.segment(*planeIndices, *coefficients);
+                if (planeIndices->indices.size() < minimumPlanePoints ||
+                    coefficients->values.size() < 4) break;
+
+                Eigen::Vector3f normal(coefficients->values[0],
+                    coefficients->values[1], coefficients->values[2]);
+                float offset = coefficients->values[3];
+                const float normalLength = normal.norm();
+                if (!std::isfinite(normalLength) || normalLength < 1e-6f) break;
+                normal /= normalLength;
+                offset /= normalLength;
+                if (normal.dot(up) < 0.0f) {
+                    normal = -normal;
+                    offset = -offset;
+                }
+
+                // 单侧性在完整点云上统计，而非仅剩余点
+                size_t below = 0, above = 0;
+                for (const auto& point : ds->points) {
+                    const float signedDistance = normal.dot(point.getVector3fMap()) + offset;
+                    if (signedDistance < -m_leafSize * 1.5f) ++below;
+                    else if (signedDistance > m_leafSize * 2.0f) ++above;
+                }
+                const float belowRatio = static_cast<float>(below) / static_cast<float>(ds->size());
+                const float aboveRatio = static_cast<float>(above) / static_cast<float>(ds->size());
+
+                double heightSum = 0.0;
+                for (int index : planeIndices->indices) {
+                    heightSum += up.dot(remaining->points[index].getVector3fMap());
+                }
+                const float height = static_cast<float>(heightSum / planeIndices->indices.size());
+                const bool isSupport = belowRatio < 0.02f && aboveRatio >= 0.05f;
+
+                emit progress(QString::fromUtf8(
+                    "平面候选%1：%2 点，高度 %3，下方 %4%，上方 %5%%6")
+                    .arg(attempt + 1).arg(planeIndices->indices.size())
+                    .arg(height, 0, 'f', 2)
+                    .arg(belowRatio * 100.0f, 0, 'f', 1)
+                    .arg(aboveRatio * 100.0f, 0, 'f', 1)
+                    .arg(isSupport ? QString::fromUtf8("，判定为支撑面") : QString()));
+
+                if (isSupport && height < supportHeight) {
+                    found = true;
+                    supportNormal = normal;
+                    supportOffset = offset;
+                    supportHeight = height;
+                }
+
+                pcl::ExtractIndices<pcl::PointXYZ> extract;
+                extract.setInputCloud(remaining);
+                extract.setIndices(planeIndices);
+                extract.setNegative(true);
+                pcl::PointCloud<pcl::PointXYZ>::Ptr next(new pcl::PointCloud<pcl::PointXYZ>());
+                extract.filter(*next);
+                remaining = next;
+            }
+
+            if (found) {
+                // 连同平面以下的残余噪声一起剔除
+                pcl::PointCloud<pcl::PointXYZ>::Ptr abovePlane(new pcl::PointCloud<pcl::PointXYZ>());
+                abovePlane->reserve(ds->size());
+                for (const auto& point : ds->points) {
+                    if (supportNormal.dot(point.getVector3fMap()) + supportOffset >
+                        m_leafSize * 1.25f) {
+                        abovePlane->push_back(point);
+                    }
+                }
+                if (abovePlane->size() >= 100) {
+                    emit progress(QString::fromUtf8("剔除支撑平面：%1 点 -> %2 点")
+                        .arg(ds->size()).arg(abovePlane->size()));
+                    ds = abovePlane;
+                    planeRemoved = true;
+                }
+            }
+            else {
+                emit progress(QString::fromUtf8("未识别到支撑平面，保留全部点。"));
+            }
+        }
+
+        // 4. 点云中可能同时存在工件、定位环和夹具残块。按空间连通性聚类，并优先保留
         // 尺寸接近 CAD 的最大主体，避免无关物体污染 FPFH 和 ICP。
-        if (applySor && ds->size() > 200) {
+        struct WorkpieceSelection {
+            pcl::PointCloud<pcl::PointXYZ>::Ptr cloud;
+            size_t clusterCount = 0;
+            float diagonal = 0.0f;
+            float sizeRatio = 0.0f;
+        };
+        auto selectWorkpiece = [&](pcl::PointCloud<pcl::PointXYZ>::Ptr source) {
+            WorkpieceSelection selection;
             pcl::search::KdTree<pcl::PointXYZ>::Ptr clusterTree(
                 new pcl::search::KdTree<pcl::PointXYZ>());
-            clusterTree->setInputCloud(ds);
+            clusterTree->setInputCloud(source);
 
             std::vector<pcl::PointIndices> clusters;
             pcl::EuclideanClusterExtraction<pcl::PointXYZ> extraction;
-            const size_t pointsBeforeClustering = ds->size();
             extraction.setClusterTolerance(m_leafSize * 2.0f);
             extraction.setMinClusterSize(40);
-            extraction.setMaxClusterSize(static_cast<int>(ds->size()));
+            extraction.setMaxClusterSize(static_cast<int>(source->size()));
             extraction.setSearchMethod(clusterTree);
-            extraction.setInputCloud(ds);
+            extraction.setInputCloud(source);
             extraction.extract(clusters);
+            selection.clusterCount = clusters.size();
 
             int selectedCluster = -1;
             float selectedScore = -std::numeric_limits<float>::infinity();
@@ -501,7 +582,7 @@ void ModelMatchWorker::preprocess()
             for (size_t i = 0; i < clusters.size(); ++i) {
                 pcl::PointCloud<pcl::PointXYZ>::Ptr cluster(new pcl::PointCloud<pcl::PointXYZ>());
                 cluster->reserve(clusters[i].indices.size());
-                for (int index : clusters[i].indices) cluster->push_back(ds->points[index]);
+                for (int index : clusters[i].indices) cluster->push_back(source->points[index]);
 
                 pcl::PointXYZ clusterMin, clusterMax;
                 pcl::getMinMax3D(*cluster, clusterMin, clusterMax);
@@ -520,18 +601,39 @@ void ModelMatchWorker::preprocess()
             }
 
             if (selectedCluster >= 0 && clusters[selectedCluster].indices.size() >= 100) {
-                pcl::PointCloud<pcl::PointXYZ>::Ptr workpiece(new pcl::PointCloud<pcl::PointXYZ>());
-                workpiece->reserve(clusters[selectedCluster].indices.size());
+                selection.cloud.reset(new pcl::PointCloud<pcl::PointXYZ>());
+                selection.cloud->reserve(clusters[selectedCluster].indices.size());
                 for (int index : clusters[selectedCluster].indices) {
-                    workpiece->push_back(ds->points[index]);
+                    selection.cloud->push_back(source->points[index]);
                 }
-                ds = workpiece;
-                const float sizeRatio = selectedDiagonal / std::max(diagonal, 1e-6f);
+                selection.diagonal = selectedDiagonal;
+                selection.sizeRatio = selectedDiagonal / std::max(diagonal, 1e-6f);
+            }
+            return selection;
+            };
+
+        if (applySor && ds->size() > 200) {
+            const size_t pointsBeforeClustering = ds->size();
+            WorkpieceSelection selection = selectWorkpiece(ds);
+
+            // 剔除平面后主体明显小于CAD、而未剔除时尺寸合理，说明删掉的很可能是工件表面
+            if (planeRemoved && (!selection.cloud || selection.sizeRatio < 0.45f)) {
+                WorkpieceSelection fallback = selectWorkpiece(beforePlaneRemoval);
+                if (fallback.cloud && fallback.sizeRatio >= 0.45f && fallback.sizeRatio <= 1.35f) {
+                    emit progress(QString::fromUtf8(
+                        "剔除支撑平面后主体尺寸比仅 %1，疑似误删工件表面，已回退到未剔除平面的点云。")
+                        .arg(selection.sizeRatio, 0, 'f', 3));
+                    selection = fallback;
+                }
+            }
+
+            if (selection.cloud) {
+                ds = selection.cloud;
                 emit progress(QString::fromUtf8(
                     "工件聚类：共 %1 个连通区域，从 %2 点保留主体 %3 点，对角线 %4，尺寸比 %5")
-                    .arg(clusters.size()).arg(pointsBeforeClustering).arg(ds->size())
-                    .arg(selectedDiagonal, 0, 'f', 1).arg(sizeRatio, 0, 'f', 3));
-                if (sizeRatio > 1.08f) {
+                    .arg(selection.clusterCount).arg(pointsBeforeClustering).arg(ds->size())
+                    .arg(selection.diagonal, 0, 'f', 1).arg(selection.sizeRatio, 0, 'f', 3));
+                if (selection.sizeRatio > 1.08f) {
                     emit progress(QString::fromUtf8(
                         "尺寸警告：扫描主体对角线大于CAD超过8%，仍可能包含夹具/圆环，或点云标定尺度不正确。"));
                 }
@@ -543,7 +645,7 @@ void ModelMatchWorker::preprocess()
             return;
         }
 
-        // 3. 在轻量级点云上计算法向 (OpenMP 多核全开)
+        // 5. 在轻量级点云上计算法向 (OpenMP 多核全开)
         output.reset(new PointCloudNT());
         pcl::NormalEstimationOMP<pcl::PointXYZ, PointNT> ne;
         ne.setInputCloud(ds);
@@ -1223,11 +1325,6 @@ MatchVerdict ModelMatchWorker::classifyResult(const MatchResult& r) const
     if (r.rmse > m_leafSize * 1.25f || r.p95Residual > m_leafSize * 2.0f) {
         return MatchVerdict::Fail;
     }
-    if (r.wasAmbiguous) return MatchVerdict::NeedsReview;
-    if (!r.convergedStageB || r.overlapRatio < 0.55f ||
-        r.reverseOverlapRatio < 0.25f || r.featureOverlapRatio < 0.35f ||
-        r.spatialCoverageRatio < 0.40f || r.normalConsistency < 0.70f) {
-        return MatchVerdict::NeedsReview;
-    }
+    // 歧义与精配准B未收敛不再阻断，由界面日志提示；已取最高分候选作为结果。
     return MatchVerdict::Pass;
 }

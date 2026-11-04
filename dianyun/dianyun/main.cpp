@@ -3,9 +3,16 @@
 
 // 主题与自定义类型注册所需头文件
 #include <QFile>
+#include <QDateTime>
+#include <QDir>
 #include <QMetaType>
 #include <QPalette>
 #include <QStyleFactory>
+#include <cstdio>
+#include <cstdlib>
+#include <exception>
+#include <string>
+#include <typeinfo>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <Eigen/Core>
@@ -44,12 +51,49 @@ void applyDarkTheme(QApplication& app)
     }
 }
 
+// 未捕获的 C++ 异常会直接走 std::terminate 闪退，现场没有任何线索。
+// 这里把异常类型与 what() 写入 exe 同目录的 dianyun_crash.log。
+std::string g_crashLogPath;
+
+void logTerminate()
+{
+    std::string text = "未捕获的异常导致程序终止：";
+    try {
+        if (const std::exception_ptr ep = std::current_exception()) {
+            std::rethrow_exception(ep);
+        }
+        text += "无活动异常（可能是 abort() 或 noexcept 违规）";
+    }
+    catch (const std::exception& e) {
+        text += std::string(typeid(e).name()) + " : " + e.what();
+    }
+    catch (...) {
+        text += "非 std::exception 类型的异常";
+    }
+
+    if (std::FILE* f = std::fopen(g_crashLogPath.c_str(), "ab")) {
+        std::fprintf(f, "[%s] %s\n",
+            QDateTime::currentDateTime().toString(Qt::ISODate).toLocal8Bit().constData(),
+            text.c_str());
+        std::fclose(f);
+    }
+    std::abort();
+}
+
+void installTerminateLogger()
+{
+    g_crashLogPath = QDir(QCoreApplication::applicationDirPath())
+        .filePath(QStringLiteral("dianyun_crash.log")).toLocal8Bit().constData();
+    std::set_terminate(logTerminate);
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
 {
     QApplication a(argc, argv);
     applyDarkTheme(a);
+    installTerminateLogger();
 
     // === 在这里注册 PCL 和 Eigen 的自定义类型 ===
     // 必须放在 QApplication 创建之后，主窗口 dianyun 实例化之前！

@@ -1,6 +1,9 @@
 #include "dianyun.h"
 #include "ui_dianyun.h"
 
+#include "PoseMath.h"
+#include "WeldPathPlanner.h"
+
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHeaderView>
@@ -27,6 +30,7 @@
 #include <Eigen/Core>
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 
@@ -67,6 +71,9 @@ dianyun::dianyun(QWidget* parent)
     qRegisterMetaType<HikCameraWorker::State>("HikCameraWorker::State");
     qRegisterMetaType<RobotWorker::State>("RobotWorker::State");
     qRegisterMetaType<RobotTelemetry>("RobotTelemetry");
+    // 轮廓帧从相机回调线程跨到 GUI 线程拼接
+    qRegisterMetaType<ScanFrame::Ptr>("ScanFrame::Ptr");
+    qRegisterMetaType<CloudFrame>("CloudFrame");
 
     setupThemeAssets();
     setupDeviceIndicators();
@@ -108,6 +115,8 @@ dianyun::dianyun(QWidget* parent)
 
     setupCameraWorker();
     setupRobotWorker();
+    setupScanController();
+    setupPathController();
 
     updateStatusUI();
     resetMatchCard();
@@ -199,6 +208,9 @@ void dianyun::initializeViewers()
         m_scanViewer->setShowFPS(false);
         m_scanViewer->setupInteractor(
             vtkWidget->interactor(), vtkWidget->renderWindow());
+        // PCL 默认 Shift+左键拾取点
+        m_scanViewer->registerPointPickingCallback(
+            &dianyun::scanPointPicked, *this);
     }
 }
 
@@ -299,6 +311,60 @@ void dianyun::setupRobotWorker()
     m_robotThread->start();
 }
 
+void dianyun::setupScanController()
+{
+    // 编排器活在 GUI 线程：它只收帧、算拼接、发指令，
+    // 真正的 SDK 调用都在两个 worker 线程里，故不需要独立线程。
+    m_scanController = new ScanController(m_cameraWorker, m_robotWorker, this);
+    connect(m_scanController, &ScanController::progress,
+        this, &dianyun::onScanProgress);
+    connect(m_scanController, &ScanController::finished,
+        this, &dianyun::onScanFinished);
+    connect(m_scanController, &ScanController::failed,
+        this, &dianyun::onScanFailed);
+    loadHandEyeConfig();
+}
+
+void dianyun::setupPathController()
+{
+    m_pathController = new WeldPathController(m_robotWorker, this);
+    connect(m_pathController, &WeldPathController::progress,
+        this, &dianyun::onPathProgress);
+    connect(m_pathController, &WeldPathController::finished,
+        this, &dianyun::onPathFinished);
+    connect(m_pathController, &WeldPathController::failed,
+        this, &dianyun::onPathFailed);
+}
+
+void dianyun::loadHandEyeConfig()
+{
+    QString message;
+    m_handEyeValid = HandEyeConfig::load(
+        HandEyeConfig::defaultPath(), m_handEye, message);
+    if (m_handEyeValid) {
+        if (m_scanController) m_scanController->setHandEye(m_handEye);
+        const double* h = m_handEye.tcpToSensor;
+        appendLog(QString::fromUtf8(
+            "%1\n手眼 T_tcp_sensor：%2, %3, %4 mm / %5, %6, %7°；"
+            "sensorAxis 为单位阵：%8；时间补偿 %9 µs。")
+            .arg(message)
+            .arg(h[0], 0, 'f', 3).arg(h[1], 0, 'f', 3).arg(h[2], 0, 'f', 3)
+            .arg(h[3], 0, 'f', 3).arg(h[4], 0, 'f', 3).arg(h[5], 0, 'f', 3)
+            .arg(m_handEye.sensorAxis.isIdentity(1e-9)
+                ? QString::fromUtf8("是") : QString::fromUtf8("否"))
+            .arg(m_handEye.timeOffsetUs, 0, 'f', 0),
+            LogLevel::Info);
+    }
+    else {
+        // 标定文件损坏时宁可不出基坐标点云，也不能用默认值悄悄驱动机械臂
+        if (m_scanController) m_scanController->clearHandEye();
+        appendLog(message + QString::fromUtf8(
+            "\n扫描将只输出传感器坐标点云，焊缝轨迹执行已禁用。"),
+            LogLevel::Error);
+        showAlarm(AlarmLevel::Error, message);
+    }
+}
+
 void dianyun::setupSplitters()
 {
     // 分栏比例依赖窗口真实尺寸，构造期宽度尚未确定，统一放到 showEvent 中应用
@@ -393,6 +459,36 @@ void dianyun::setupMenuAndShortcuts()
     m_actRobotResetFault = robotMenu->addAction(
         QString::fromUtf8("清除报警"),
         this, &dianyun::onRobotResetFault);
+    robotMenu->addSeparator();
+    m_actScanStart = robotMenu->addAction(
+        QString::fromUtf8("开始扫描采集"),
+        QKeySequence(QStringLiteral("Ctrl+Shift+S")),
+        this, &dianyun::onScanRequestAction);
+    m_actScanCancel = robotMenu->addAction(
+        QString::fromUtf8("取消扫描"),
+        this, [this]() {
+            if (m_scanController) m_scanController->cancel();
+        });
+    robotMenu->addSeparator();
+    m_actMoveAbovePick = robotMenu->addAction(
+        QString::fromUtf8("移到点选位置上方 30 mm（标定核对）"),
+        this, &dianyun::onMoveAbovePickedPoint);
+    m_actWeldDryRun = robotMenu->addAction(
+        QString::fromUtf8("焊缝空走（抬高 20 mm）"),
+        this, &dianyun::onWeldDryRun);
+    m_actWeldExecute = robotMenu->addAction(
+        QString::fromUtf8("沿焊缝执行"),
+        this, &dianyun::onWeldExecute);
+    m_actPathCancel = robotMenu->addAction(
+        QString::fromUtf8("停止轨迹运动"),
+        QKeySequence(Qt::Key_Escape),
+        this, [this]() {
+            if (m_pathController) m_pathController->cancel();
+        });
+    robotMenu->addSeparator();
+    m_actReloadCalibration = robotMenu->addAction(
+        QString::fromUtf8("重新加载手眼标定"),
+        this, &dianyun::onReloadCalibration);
 
     commMenu->addSeparator();
     commMenu->addAction(QString::fromUtf8("通信自检"),
@@ -555,10 +651,6 @@ void dianyun::showMatchCard(const MatchResult& result)
         verdictText = QString::fromUtf8("匹配通过");
         tone = QStringLiteral("pass");
     }
-    else if (result.verdict == MatchVerdict::NeedsReview) {
-        verdictText = QString::fromUtf8("需要人工确认");
-        tone = QStringLiteral("review");
-    }
     else {
         verdictText = QString::fromUtf8("质量不足");
         tone = QStringLiteral("fail");
@@ -572,9 +664,8 @@ void dianyun::showMatchCard(const MatchResult& result)
     ui->lblVerdictDot->setText(QString::fromUtf8("●"));
     ui->lblVerdictDot->setStyleSheet(
         QStringLiteral("color: %1; font-size: 9pt;")
-            .arg(tone == QStringLiteral("pass") ? QStringLiteral("#2AC44E") :
-                 tone == QStringLiteral("review") ? QStringLiteral("#F57C00") :
-                                                    QStringLiteral("#E53935")));
+            .arg(tone == QStringLiteral("pass") ? QStringLiteral("#2AC44E")
+                                                : QStringLiteral("#E53935")));
 
     ui->lblOverlap->setText(result.success
         ? QString::fromUtf8("覆盖 %1%")
@@ -882,10 +973,13 @@ void dianyun::updateActionStates()
         m_pointCloudLoadController->isRunning();
     const bool cameraCapturing = m_cameraWorker &&
         m_cameraWorker->isCapturing();
+    const bool scanning = m_scanController && m_scanController->isRunning();
     // 采集期间禁止其它数据操作，但相机按钮自身必须保持可点击（用于停止）
     const bool dataActionsEnabled =
         !matchRunning && !cloudLoading && !cameraCapturing;
-    const bool cameraButtonEnabled = !matchRunning && !cloudLoading;
+    // 扫描期间相机按钮要禁用：此时点它会停掉扫描的持续采集
+    const bool cameraButtonEnabled =
+        !matchRunning && !cloudLoading && !scanning;
 
     if (ui->btnOpen) ui->btnOpen->setEnabled(dataActionsEnabled);
     if (ui->btnOpen_2) ui->btnOpen_2->setEnabled(dataActionsEnabled);
@@ -937,6 +1031,33 @@ void dianyun::updateActionStates()
     if (m_actRobotResetFault) {
         m_actRobotResetFault->setEnabled(
             !robotOffline && m_robotState != DeviceLinkState::Connecting);
+    }
+
+    // 扫描要求相机与机械臂都在线且都没有在跑别的任务
+    const bool scanPossible = m_cameraState == DeviceLinkState::Online
+        && m_robotState == DeviceLinkState::Online
+        && !matchRunning && !cloudLoading;
+    const bool pathRunning = m_pathController && m_pathController->isRunning();
+    if (m_actScanStart) {
+        m_actScanStart->setEnabled(scanPossible && !scanning && !pathRunning);
+    }
+    if (m_actScanCancel) m_actScanCancel->setEnabled(scanning);
+
+    // 轨迹运动要求：点云在基坐标、标定有效、机械臂空闲
+    const bool motionPossible = m_robotState == DeviceLinkState::Online
+        && m_handEyeValid && m_scanCloudFrame == CloudFrame::RobotBase
+        && !scanning && !pathRunning && !matchRunning;
+    const bool seamReady = motionPossible && selectedSeam() != nullptr
+        && m_lastMatchResult.success
+        && m_lastMatchResult.verdict == MatchVerdict::Pass;
+    if (m_actMoveAbovePick) {
+        m_actMoveAbovePick->setEnabled(motionPossible && m_havePickedPoint);
+    }
+    if (m_actWeldDryRun) m_actWeldDryRun->setEnabled(seamReady);
+    if (m_actWeldExecute) m_actWeldExecute->setEnabled(seamReady);
+    if (m_actPathCancel) m_actPathCancel->setEnabled(pathRunning);
+    if (m_actReloadCalibration) {
+        m_actReloadCalibration->setEnabled(!scanning && !pathRunning);
     }
 }
 
@@ -1118,6 +1239,9 @@ void dianyun::onPointCloudLoadFinished(CloudRGB::Ptr loadedCloud, double diagona
     }
 
     m_scanCloud = std::move(loadedCloud);
+    // 导入文件不知道坐标系，一律按传感器坐标处理，不允许驱动机械臂
+    m_scanCloudFrame = CloudFrame::Sensor;
+    m_havePickedPoint = false;
     invalidateMatchResult();
     m_visualization.showScanCloud(m_scanCloud, diagonal);
     m_reportProgressiveRender = true;
@@ -1425,10 +1549,26 @@ void dianyun::on_btnOpenCamera_clicked()
         break;
 
     case DeviceLinkState::Online:
+        // 扫描占用相机时不允许插入单帧拍摄：那会把扫描流掐断
+        if (m_scanController && m_scanController->isRunning()) {
+            appendLog(QString::fromUtf8("扫描进行中，无法单帧拍摄。"),
+                LogLevel::Warning);
+            break;
+        }
+        // 机械臂在线时，「开始拍摄」就是整幅扫描：相机出流 + 机械臂沿工具 X 行进。
+        // 只有机械臂没连时才退回单帧拍摄（只得到一条轮廓，不会有位移）。
+        if (m_robotState == DeviceLinkState::Online) {
+            onScanRequestAction();
+            break;
+        }
+        appendLog(QString::fromUtf8(
+            "机械臂未连接，仅单帧拍摄（只有一条轮廓，不会移动）。"),
+            LogLevel::Warning);
         {
             HikCameraWorker* worker = m_cameraWorker;
             QMetaObject::invokeMethod(worker, [worker]() {
                 worker->m_params.frameCount = 1;
+                worker->m_params.captureTimeoutMs = 0;
                 worker->startCapture();
             }, Qt::QueuedConnection);
         }
@@ -1472,21 +1612,22 @@ void dianyun::on_btnRobotWeld_clicked()
         break;
 
     case DeviceLinkState::Online:
-        // 当前阶段只做只读监控，主动轮询一次刷新界面
-        {
-            RobotWorker* worker = m_robotWorker;
-            QMetaObject::invokeMethod(worker,
-                [worker]() { worker->queryTelemetryOnce(); },
-                Qt::QueuedConnection);
-        }
-        appendLog(QString::fromUtf8("已刷新机器人状态。"), LogLevel::Info);
+        // 机械臂已就绪时，这个按钮的语义是「开始扫描采集」
+        onScanRequestAction();
         break;
 
     case DeviceLinkState::Busy:
-        // 机器人正在运动，本阶段不下发任何指令，只提示
-        appendLog(QString::fromUtf8(
-            "机械臂正在运行，本阶段仅监控，不干预运动。"),
-            LogLevel::Warning);
+        // 机械臂正在运动：若正是本次扫描或轨迹，则终止；否则只提示
+        if (m_scanController && m_scanController->isRunning()) {
+            m_scanController->cancel();
+        }
+        else if (m_pathController && m_pathController->isRunning()) {
+            m_pathController->cancel();
+        }
+        else {
+            appendLog(QString::fromUtf8("机械臂正在运行，请等待其到位。"),
+                LogLevel::Warning);
+        }
         break;
 
     case DeviceLinkState::Connecting:
@@ -1700,6 +1841,11 @@ void dianyun::onRobotLinkStateChanged(
 void dianyun::onRobotTelemetryUpdated(RobotTelemetry telemetry)
 {
     m_robotTelemetry = telemetry;
+    if (telemetry.connected) {
+        std::copy_n(telemetry.tcpPose, 6, m_lastTcpPose);
+        m_haveTcpPose = true;
+    }
+    updateActionStates();
 }
 
 void dianyun::onRobotFault(const QString& message)
@@ -1841,6 +1987,8 @@ void dianyun::onCameraPointCloudReady(CloudRGB::Ptr newCloud)
 {
     if (!newCloud || newCloud->empty()) return;
     m_scanCloud = std::move(newCloud);
+    m_scanCloudFrame = CloudFrame::Sensor;
+    m_havePickedPoint = false;
     invalidateMatchResult();
     m_visualization.showScanCloud(m_scanCloud);
     m_reportProgressiveRender = true;
@@ -1849,6 +1997,402 @@ void dianyun::onCameraPointCloudReady(CloudRGB::Ptr newCloud)
     appendLog(QString::fromUtf8("实时拼接完成，正在分批显示，节点数：") +
         QString::number(m_scanCloud->size()), LogLevel::Success);
     refreshDataSummary();
+}
+
+void dianyun::onScanRequestAction()
+{
+    if (!m_scanController) return;
+
+    if (m_cameraState != DeviceLinkState::Online) {
+        appendLog(QString::fromUtf8("请先连接相机。"), LogLevel::Warning);
+        return;
+    }
+    if (m_robotState != DeviceLinkState::Online) {
+        appendLog(QString::fromUtf8("请先连接机械臂。"), LogLevel::Warning);
+        return;
+    }
+    if (m_reportProgressiveRender) {
+        appendLog(QString::fromUtf8("点云仍在分批显示，请稍候。"));
+        return;
+    }
+
+    // 扫描姿态固定：工具 Z 竖直向下，工具 Y 平行基坐标 +X（Rz = 90°），
+    // 高度取基坐标 Z 的绝对值 —— 低处相机视野收不全工件。
+    // 先竖直抬到安全高度再转姿态，避免低位斜插的直线穿过工件。
+    constexpr double kScanYawDeg = 90.0;
+    constexpr double kScanTcpZmm = 150.0;
+
+    double heading = 0.0;   // 仅用于 levelHeading 的倾角检查，扫描时被固定值取代
+    double tiltDeg = 0.0;
+    if (!levelHeading(heading, tiltDeg)) return;
+
+    const double liftZ = std::max(m_lastTcpPose[2], kScanTcpZmm);
+    const bool needLift = std::fabs(m_lastTcpPose[2] - liftZ) > 0.5;
+
+    double liftPose[6] = { m_lastTcpPose[0], m_lastTcpPose[1], liftZ,
+        m_lastTcpPose[3], m_lastTcpPose[4], m_lastTcpPose[5] };
+    double levelPose[6] = { m_lastTcpPose[0], m_lastTcpPose[1], kScanTcpZmm,
+        180.0, 0.0, kScanYawDeg };
+
+    const auto answer = QMessageBox::question(this,
+        QString::fromUtf8("开始扫描采集"),
+        QString::fromUtf8(
+            "① %1；\n"
+            "② 调平到基坐标 Z = %2 mm：工具 Z 竖直向下、工具 Y 平行基坐标 +X"
+            "（Rx 180 / Ry 0 / Rz %3°）；\n"
+            "③ 沿工具 X 轴（基坐标 +Y）直线移动 200 mm，行程约 7 秒；\n"
+            "④ 结束后自动退回扫描起点。\n"
+            "请确认上方与激光范围内无人无障碍。\n\n"
+            "当前位姿：X %4  Y %5  Z %6 (mm)  Rx %7  Ry %8  Rz %9 (deg)\n"
+            "扫描位姿：X %4  Y %5  Z %2 (mm)  Rx 180.00  Ry 0.00  Rz %3 (deg)\n"
+            "当前工具 Z 偏离竖直向下 %10°。")
+            .arg(needLift
+                    ? QString::fromUtf8("竖直抬到基坐标 Z = %1 mm")
+                        .arg(liftZ, 0, 'f', 2)
+                    : QString::fromUtf8("已在安全高度，无需抬升"))
+            .arg(kScanTcpZmm, 0, 'f', 2)
+            .arg(kScanYawDeg, 0, 'f', 2)
+            .arg(m_lastTcpPose[0], 0, 'f', 2)
+            .arg(m_lastTcpPose[1], 0, 'f', 2)
+            .arg(m_lastTcpPose[2], 0, 'f', 2)
+            .arg(m_lastTcpPose[3], 0, 'f', 2)
+            .arg(m_lastTcpPose[4], 0, 'f', 2)
+            .arg(m_lastTcpPose[5], 0, 'f', 2)
+            .arg(tiltDeg, 0, 'f', 1),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) return;
+
+    ScanRequest request;
+    std::copy_n(levelPose, 6, request.startPose);
+    std::copy_n(liftPose, 6, request.liftPose);
+    request.useStartPose = true;    // 先走到扫描位姿，再起流扫描
+    request.useLiftPose = needLift; // 已在安全高度以上则跳过竖直抬升
+    request.scanAxis = ScanRequest::ScanAxis::ToolX;
+    request.scanLengthMm = 200.0;
+    request.stepUm = 96.0f;
+    request.lineRate = 600.0f;
+    request.exposureUs = 80.0f;
+    request.gainDb = 0.0f;
+    request.photosensitivity = 4;
+
+    appendLog(QString::fromUtf8(
+        "扫描开始：%1。扫描位姿：%2, %3, %4 mm / 180.00, 0.00, %5°。")
+        .arg(needLift
+                ? QString::fromUtf8("先抬到 Z = ") + QString::number(liftZ, 'f', 2)
+                    + QString::fromUtf8(" mm 再调平")
+                : QString::fromUtf8("已在安全高度，直接调平"))
+        .arg(levelPose[0], 0, 'f', 2)
+        .arg(levelPose[1], 0, 'f', 2)
+        .arg(levelPose[2], 0, 'f', 2)
+        .arg(levelPose[5], 0, 'f', 2),
+        LogLevel::Info);
+    setStatusText(QString::fromUtf8("扫描中"), AlarmLevel::Warning);
+    m_scanController->start(request);
+    updateActionStates();
+}
+
+void dianyun::onScanProgress(QString stage)
+{
+    appendLog(stage, LogLevel::Info);
+    setStatusText(stage);
+    updateActionStates();
+}
+
+void dianyun::onScanFinished(CloudRGB::Ptr cloud, CloudFrame frame)
+{
+    if (!cloud || cloud->empty()) {
+        appendLog(QString::fromUtf8("扫描结束但没有得到有效点。"),
+            LogLevel::Warning);
+        updateActionStates();
+        return;
+    }
+
+    m_scanCloud = cloud;
+    m_scanCloudFrame = frame;
+    m_havePickedPoint = false;
+    invalidateMatchResult();
+    m_visualization.showScanCloud(m_scanCloud);
+    m_reportProgressiveRender = true;
+    m_lastRenderPercent = -1;
+    setStatusText(QString::fromUtf8("扫描完成"));
+    appendLog(QString::fromUtf8("扫描完成，点云节点数：%1，坐标系：%2。")
+        .arg(m_scanCloud->size())
+        .arg(frame == CloudFrame::RobotBase
+            ? QString::fromUtf8("机械臂基坐标（可 Shift+单击点云核对标定）")
+            : QString::fromUtf8("传感器坐标（不可用于运动）")),
+        LogLevel::Success);
+    refreshDataSummary();
+    updateActionStates();
+}
+
+void dianyun::onScanFailed(QString message)
+{
+    appendLog(QString::fromUtf8("扫描失败：%1").arg(message),
+        LogLevel::Error);
+    showAlarm(AlarmLevel::Error, QString::fromUtf8("扫描失败：") + message);
+    setStatusText(QString::fromUtf8("扫描失败"), AlarmLevel::Error);
+    updateActionStates();
+}
+
+bool dianyun::levelHeading(double& headingDeg, double& tiltDeg)
+{
+    if (!m_haveTcpPose) {
+        appendLog(QString::fromUtf8(
+            "尚未收到机械臂位姿，请确认已连接并等待状态刷新。"),
+            LogLevel::Warning);
+        return false;
+    }
+    // 调平转角超过该值多半是示教姿态与预期不符，自动转过去有撞件风险
+    constexpr double kMaxLevelTiltDeg = 30.0;
+    headingDeg = PoseMath::headingDeg(m_lastTcpPose);
+    tiltDeg = PoseMath::tiltFromDownDeg(m_lastTcpPose);
+    if (tiltDeg > kMaxLevelTiltDeg) {
+        appendLog(QString::fromUtf8(
+            "当前工具 Z 偏离竖直向下 %1°，超过自动调平上限 %2°，"
+            "请先用示教器把末端大致摆成朝下。")
+            .arg(tiltDeg, 0, 'f', 1).arg(kMaxLevelTiltDeg, 0, 'f', 0),
+            LogLevel::Warning);
+        return false;
+    }
+    return true;
+}
+
+bool dianyun::robotMotionAllowed()
+{
+    QString reason;
+    if (m_robotState != DeviceLinkState::Online) {
+        reason = QString::fromUtf8("机械臂未就绪（需已连接且空闲）。");
+    }
+    else if (!m_handEyeValid) {
+        reason = QString::fromUtf8("手眼标定文件无效，请修正 calibration.json 后重新加载。");
+    }
+    else if (m_scanCloudFrame != CloudFrame::RobotBase) {
+        reason = QString::fromUtf8(
+            "当前点云不在机械臂基坐标下（文件导入或回退拼接），不能用于运动，请重新扫描。");
+    }
+    else if (m_scanController && m_scanController->isRunning()) {
+        reason = QString::fromUtf8("扫描进行中。");
+    }
+    else if (m_pathController && m_pathController->isRunning()) {
+        reason = QString::fromUtf8("已有轨迹在执行。");
+    }
+    if (reason.isEmpty()) return true;
+    appendLog(reason, LogLevel::Warning);
+    return false;
+}
+
+void dianyun::scanPointPicked(
+    const pcl::visualization::PointPickingEvent& event, void*)
+{
+    if (event.getPointIndex() < 0) return;
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    event.getPoint(x, y, z);
+    m_pickedPoint = Eigen::Vector3f(x, y, z);
+    m_havePickedPoint = true;
+
+    if (m_scanCloudFrame == CloudFrame::RobotBase) {
+        QString tcpText;
+        if (m_haveTcpPose) {
+            tcpText = QString::fromUtf8("；当前 TCP %1, %2, %3 mm，点相对 TCP 高差 %4 mm")
+                .arg(m_lastTcpPose[0], 0, 'f', 2)
+                .arg(m_lastTcpPose[1], 0, 'f', 2)
+                .arg(m_lastTcpPose[2], 0, 'f', 2)
+                .arg(z - m_lastTcpPose[2], 0, 'f', 2);
+        }
+        appendLog(QString::fromUtf8("点选（基坐标）：X %1  Y %2  Z %3 mm%4。")
+            .arg(x, 0, 'f', 2).arg(y, 0, 'f', 2).arg(z, 0, 'f', 2).arg(tcpText),
+            LogLevel::Info);
+    }
+    else {
+        appendLog(QString::fromUtf8("点选（传感器坐标）：X %1  Y %2  Z %3 mm，不可用于运动。")
+            .arg(x, 0, 'f', 2).arg(y, 0, 'f', 2).arg(z, 0, 'f', 2));
+    }
+    updateActionStates();
+}
+
+void dianyun::onMoveAbovePickedPoint()
+{
+    if (!m_havePickedPoint || !robotMotionAllowed()) return;
+    double heading = 0.0;
+    double tiltDeg = 0.0;
+    if (!levelHeading(heading, tiltDeg)) return;
+
+    constexpr double kAboveMm = 30.0;
+    WeldWaypoint waypoint;
+    waypoint.kind = WeldWaypoint::Kind::Approach;
+    waypoint.pose = { m_pickedPoint.x(), m_pickedPoint.y(),
+        m_pickedPoint.z() + kAboveMm, 180.0, 0.0, heading };
+
+    const double distance = std::sqrt(
+        std::pow(waypoint.pose[0] - m_lastTcpPose[0], 2)
+        + std::pow(waypoint.pose[1] - m_lastTcpPose[1], 2)
+        + std::pow(waypoint.pose[2] - m_lastTcpPose[2], 2));
+    const auto answer = QMessageBox::question(this,
+        QString::fromUtf8("移到点选位置上方"),
+        QString::fromUtf8(
+            "TCP（工具 1）将以 10% 速度直线移到：\n"
+            "X %1  Y %2  Z %3 mm / Rx 180  Ry 0  Rz %4°\n"
+            "直线距离约 %5 mm。\n\n"
+            "TCP 在点选位置正上方 %6 mm，真实尖端再高 10 mm。\n"
+            "到位后用尺子量尖端到该点的偏差，即为标定链总误差；\n"
+            "若明显偏离或方向相反，请修改 calibration.json 的 sensorAxis。\n"
+            "请确认路径上无人无障碍，手放在急停上。")
+            .arg(waypoint.pose[0], 0, 'f', 2)
+            .arg(waypoint.pose[1], 0, 'f', 2)
+            .arg(waypoint.pose[2], 0, 'f', 2)
+            .arg(heading, 0, 'f', 2)
+            .arg(distance, 0, 'f', 1)
+            .arg(kAboveMm, 0, 'f', 0),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) return;
+
+    WeldPathController::Speeds speeds;
+    speeds.travelPercent = 10.0f;
+    m_pathController->start({ waypoint }, speeds,
+        QString::fromUtf8("移到点选位置上方"));
+    updateActionStates();
+}
+
+void dianyun::onWeldDryRun()
+{
+    runSelectedSeam(true);
+}
+
+void dianyun::onWeldExecute()
+{
+    runSelectedSeam(false);
+}
+
+void dianyun::runSelectedSeam(bool dryRun)
+{
+    if (!robotMotionAllowed()) return;
+    const WeldSeamData* seam = selectedSeam();
+    if (!seam) {
+        appendLog(QString::fromUtf8("请先在焊缝列表中选中一条焊缝。"), LogLevel::Warning);
+        return;
+    }
+    if (!m_lastMatchResult.success
+        || m_lastMatchResult.verdict != MatchVerdict::Pass) {
+        appendLog(QString::fromUtf8("模型匹配未通过，不能执行焊缝轨迹。"),
+            LogLevel::Warning);
+        return;
+    }
+    if (!seam->hasStart) {
+        appendLog(QString::fromUtf8(
+            "该焊缝尚未设定起焊点，焊接方向不确定。请先点「焊缝起点」。"),
+            LogLevel::Warning);
+        return;
+    }
+    const auto mapped = m_mappedSeams.find(seam->id);
+    if (mapped == m_mappedSeams.end()) {
+        appendLog(QString::fromUtf8("请先对该焊缝执行焊缝映射。"), LogLevel::Warning);
+        return;
+    }
+
+    std::vector<Eigen::Vector3f> path;
+    bool closed = false;
+    QString errorMessage;
+    if (!m_weldSeamService.orderedPath(mapped->second, path, closed, errorMessage)) {
+        appendLog(errorMessage, LogLevel::Warning);
+        return;
+    }
+
+    double heading = 0.0;
+    double tiltDeg = 0.0;
+    if (!levelHeading(heading, tiltDeg)) return;
+
+    // 空走在 TCP 自带 10 mm 余量之上再抬 20 mm，尖端距焊缝约 30 mm
+    constexpr double kDryRunLiftMm = 20.0;
+    WeldPathOptions options;
+    options.headingDeg = heading;
+    options.approachMm = 30.0;
+    options.liftMm = dryRun ? kDryRunLiftMm : 0.0;
+    WeldPathPlan plan;
+    if (!planWeldPath(path, options, plan, errorMessage)) {
+        appendLog(errorMessage, LogLevel::Warning);
+        return;
+    }
+
+    // 焊缝明显高于当前 TCP 说明点云或标定方向反了，硬拦截
+    if (plan.maxSeamZ + options.liftMm > m_lastTcpPose[2] + 100.0) {
+        appendLog(QString::fromUtf8(
+            "焊缝最高点 Z %1 mm 比当前 TCP 高出 100 mm 以上，疑似标定方向错误，已拒绝执行。")
+            .arg(plan.maxSeamZ, 0, 'f', 2), LogLevel::Error);
+        return;
+    }
+
+    WeldPathController::Speeds speeds;
+    speeds.travelPercent = 10.0f;
+    speeds.seamPercent = 5.0f;
+    const auto& start = plan.seamStart();
+    const auto& end = plan.seamEnd();
+    const QString title = dryRun
+        ? QString::fromUtf8("焊缝空走") : QString::fromUtf8("沿焊缝执行");
+    const auto answer = QMessageBox::question(this, title,
+        QString::fromUtf8(
+            "焊缝：%1（%2，%3 段，长 %4 mm）\n"
+            "起点 TCP：X %5  Y %6  Z %7 mm\n"
+            "终点 TCP：X %8  Y %9  Z %10 mm\n"
+            "焊缝高度范围 Z %11 ~ %12 mm；姿态 Rx 180 / Ry 0 / Rz %13°（全程调平）\n"
+            "接近/退出高度 %14 mm（%15% 速度），焊缝段 %16% 速度。\n"
+            "%17\n\n"
+            "请确认路径上无人无障碍，手放在急停上。按 Esc 可停止。")
+            .arg(seam->name)
+            .arg(closed ? QString::fromUtf8("闭合") : QString::fromUtf8("开放"))
+            .arg(plan.seamSegments)
+            .arg(plan.seamLengthMm, 0, 'f', 1)
+            .arg(start[0], 0, 'f', 2).arg(start[1], 0, 'f', 2).arg(start[2], 0, 'f', 2)
+            .arg(end[0], 0, 'f', 2).arg(end[1], 0, 'f', 2).arg(end[2], 0, 'f', 2)
+            .arg(plan.minSeamZ, 0, 'f', 2).arg(plan.maxSeamZ, 0, 'f', 2)
+            .arg(heading, 0, 'f', 2)
+            .arg(options.approachMm, 0, 'f', 0)
+            .arg(speeds.travelPercent, 0, 'f', 0)
+            .arg(speeds.seamPercent, 0, 'f', 0)
+            .arg(dryRun
+                ? QString::fromUtf8("空走：整条轨迹抬高 %1 mm，真实尖端距焊缝约 %2 mm。")
+                    .arg(kDryRunLiftMm, 0, 'f', 0).arg(kDryRunLiftMm + 10.0, 0, 'f', 0)
+                : QString::fromUtf8("贴合：TCP 落在焊缝上，真实尖端距焊缝 10 mm。")),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) return;
+
+    appendLog(QString::fromUtf8("%1开始：%2 个目标点。")
+        .arg(title).arg(plan.waypoints.size()), LogLevel::Info);
+    m_pathController->start(plan.waypoints, speeds, title);
+    updateActionStates();
+}
+
+void dianyun::onPathProgress(QString message)
+{
+    appendLog(message, LogLevel::Info);
+    setStatusText(message);
+    updateActionStates();
+}
+
+void dianyun::onPathFinished()
+{
+    setStatusText(QString::fromUtf8("轨迹完成"));
+    updateActionStates();
+}
+
+void dianyun::onPathFailed(QString message)
+{
+    appendLog(message, LogLevel::Error);
+    showAlarm(AlarmLevel::Error, message);
+    setStatusText(QString::fromUtf8("轨迹中止"), AlarmLevel::Error);
+    updateActionStates();
+}
+
+void dianyun::onReloadCalibration()
+{
+    loadHandEyeConfig();
+    // 已有的基坐标点云是用旧参数算的，必须重扫
+    if (m_scanCloudFrame == CloudFrame::RobotBase) {
+        m_scanCloudFrame = CloudFrame::Sensor;
+        appendLog(QString::fromUtf8(
+            "标定已重新加载，当前点云按旧参数生成，已禁用运动，请重新扫描。"),
+            LogLevel::Warning);
+    }
+    updateActionStates();
 }
 
 void dianyun::on_btnOpen_3_clicked()
@@ -1924,48 +2468,25 @@ void dianyun::onMatchFinished(quint64 requestId, MatchResult result)
         return;
     }
 
-    const QString statusText = result.verdict == MatchVerdict::Pass
-        ? QString::fromUtf8("匹配通过")
-        : (result.verdict == MatchVerdict::NeedsReview
-            ? QString::fromUtf8("需要人工确认")
-            : QString::fromUtf8("匹配质量不足"));
-    setStatusText(statusText,
-        result.verdict == MatchVerdict::Pass
-            ? AlarmLevel::Info
-            : (result.verdict == MatchVerdict::NeedsReview
-                ? AlarmLevel::Warning
-                : AlarmLevel::Error));
+    const bool passed = result.verdict == MatchVerdict::Pass;
+    setStatusText(passed ? QString::fromUtf8("匹配通过")
+                         : QString::fromUtf8("匹配质量不足"),
+        passed ? AlarmLevel::Info : AlarmLevel::Error);
 
     appendLog(QString::fromUtf8("%1：覆盖率 %2%，RMSE %3，P95 %4。")
-        .arg(result.verdict == MatchVerdict::Pass
-            ? QString::fromUtf8("模型匹配通过")
-            : (result.verdict == MatchVerdict::NeedsReview
-                ? QString::fromUtf8("模型匹配需要人工确认")
-                : QString::fromUtf8("模型匹配质量不足")))
+        .arg(passed ? QString::fromUtf8("模型匹配通过")
+                    : QString::fromUtf8("模型匹配质量不足"))
         .arg(result.overlapRatio * 100.0f, 0, 'f', 1)
         .arg(result.rmse, 0, 'f', 3)
         .arg(result.p95Residual, 0, 'f', 3),
-        result.verdict == MatchVerdict::Pass
-            ? LogLevel::Success
-            : (result.verdict == MatchVerdict::NeedsReview
-                ? LogLevel::Warning
-                : LogLevel::Error));
+        passed ? LogLevel::Success : LogLevel::Error);
 
     showMatchCard(result);
 
-    if (result.verdict == MatchVerdict::Fail) {
+    if (!passed) {
         showAlarm(AlarmLevel::Error, QString::fromUtf8(
             "匹配质量不足：覆盖率 %1%，低于通过门槛，焊缝映射已禁用")
             .arg(result.overlapRatio * 100.0f, 0, 'f', 1));
-    }
-    else if (result.verdict == MatchVerdict::NeedsReview) {
-        showAlarm(AlarmLevel::Warning, QString::fromUtf8(
-            "匹配需要人工确认：覆盖率 %1%，RMSE %2，请复核对齐结果")
-            .arg(result.overlapRatio * 100.0f, 0, 'f', 1)
-            .arg(result.rmse, 0, 'f', 3));
-    }
-
-    if (result.verdict != MatchVerdict::Pass) {
         appendLog(QString::fromUtf8(
             "诊断：CAD支持 %1%，特征覆盖 %2%，空间覆盖 %3%，法向一致性 %4%。")
             .arg(result.reverseOverlapRatio * 100.0f, 0, 'f', 1)
@@ -1975,13 +2496,21 @@ void dianyun::onMatchFinished(quint64 requestId, MatchResult result)
         if (!result.coarseCandidateReport.isEmpty()) {
             appendLog(result.coarseCandidateReport);
         }
+    }
+    else {
         if (result.wasAmbiguous) {
             appendLog(QString::fromUtf8(
-                "粗配准存在多解歧义，已选择适应度最优解。"));
+                "提示：存在分数接近的其他候选（分数比 %1），已采用得分最高的姿态。")
+                .arg(result.ambiguityRatio, 0, 'f', 3), LogLevel::Warning);
+        }
+        if (!result.convergedStageB) {
+            appendLog(QString::fromUtf8(
+                "提示：点到面精配准未收敛或已回退，采用点到点ICP的最佳姿态。"),
+                LogLevel::Warning);
         }
     }
 
-    if (result.verdict == MatchVerdict::Fail) {
+    if (!passed) {
         appendLog(QString::fromUtf8(
             "结果未达到质量门槛，不显示对齐后的CAD模型。"),
             LogLevel::Error);

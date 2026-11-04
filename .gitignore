@@ -373,8 +373,16 @@ FodyWeavers.xsd
 # 法奥协作机器人 C++ SDK（独立 git 仓库，需按 README 单独克隆）
 # 正式接入时改用 git submodule 管理
 fairino-cpp-sdk/
+frcobot_cpp_sdk/
 
-# fairino 运行库为厂商二进制，不纳入版本库；
-# 编译前从 fairino-cpp-sdk 复制到 dianyun/third_party/fairino/，见 dianyun/README.md
-dianyun/third_party/fairino/lib/*.dll
-dianyun/third_party/fairino/lib/*.lib
+# 法奥 v1.x SDK 的头文件与静态库已入库（dianyun/third_party/fairino-v1/）。
+# 控制器固件 V3.9.15-QX 只支持 v1.x 协议；v2.x 依赖的 CNDE 20005 端口未开放。
+
+# ============================================================
+# 本地临时文件
+# ============================================================
+
+# 编译验证产物与一次性探测程序（含 tip_probe 的构建输出，约 200 MB）
+tmp/
+# 调试时截取的临时图像
+tmp_*.png

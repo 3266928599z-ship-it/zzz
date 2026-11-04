@@ -18,6 +18,7 @@ struct RobotTelemetry {
     double tcpPose[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
     double jointPos[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
     int rpcLatencyMs = -1;     // 单次状态查询耗时，-1 表示未知
+    qint64 sampleUs = 0;       // 采样时刻（hostClockUs），扫描时用来对齐相机行
 };
 
 Q_DECLARE_METATYPE(RobotTelemetry)

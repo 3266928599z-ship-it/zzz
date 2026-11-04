@@ -35,4 +35,12 @@ public:
         const WeldSeamData& input,
         WeldSeamData& output,
         QString& errorMessage) const;
+
+    // 按焊接顺序取出焊缝折线顶点（闭合焊缝首尾点重复）。
+    // 焊缝必须是单条连通链，多段不连通时拒绝，避免在段间空中直线穿越。
+    bool orderedPath(
+        const WeldSeamData& seam,
+        std::vector<Eigen::Vector3f>& path,
+        bool& closed,
+        QString& errorMessage) const;
 };
