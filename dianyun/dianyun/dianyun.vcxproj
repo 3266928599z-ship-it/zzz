@@ -61,7 +61,7 @@
   <PropertyGroup Label="UserMacros">
     <Mv3dLpRoot>$(ProjectDir)..\third_party\mv3dlp</Mv3dLpRoot>
     <!-- fairino 只提供 vs2022 x86-64 的 Release 库，Debug 配置不启用机械臂模块 -->
-    <FairinoSdkRoot>$(ProjectDir)..\third_party\fairino</FairinoSdkRoot>
+    <FairinoSdkRoot>$(ProjectDir)..\third_party\fairino-3.9.3</FairinoSdkRoot>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
   </PropertyGroup>
@@ -88,11 +88,6 @@
       <AdditionalLibraryDirectories>$(VcpkgRoot)\installed\x64-windows\lib;$(Mv3dLpRoot)\lib;$(FairinoSdkRoot)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>%(AdditionalDependencies);Mv3dLp.lib;fairino.lib</AdditionalDependencies>
     </Link>
-    <!-- fairino 运行库不入库，编译前按 README 复制到 third_party/fairino/lib -->
-    <PostBuildEvent>
-      <Command>if exist "$(FairinoSdkRoot)\lib\fairino.dll" copy /y "$(FairinoSdkRoot)\lib\fairino.dll" "$(OutDir)" &gt;nul</Command>
-      <Message>复制 fairino.dll 到输出目录</Message>
-    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
@@ -192,5 +187,12 @@
           Condition="Exists('$(QtInstallDir)\bin\windeployqt.exe')">
     <Exec Command="&quot;$(QtInstallDir)\bin\windeployqt.exe&quot; --force --no-translations --no-system-d3d-compiler &quot;$(TargetPath)&quot;"
           StandardOutputImportance="low" />
+  </Target>
+  <!-- 3.9.3 SDK 是动态库，运行时需要 fairino.dll 与 exe 同目录。
+       仓库只收录 vs2022 x86-64 Release 版，Debug 配置不启用机械臂模块。 -->
+  <Target Name="DeployFairinoRuntime" AfterTargets="Build"
+          Condition="'$(Configuration)' == 'Release'">
+    <Copy SourceFiles="$(FairinoSdkRoot)\lib\fairino.dll"
+          DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 </Project>
