@@ -9,7 +9,7 @@ class RobotWorker;
 
 // 逐点下发 MoveL 执行一条 TCP 轨迹（工具 1、基坐标）。
 // 每段等 RobotWorker::moveFinished 到位后再发下一段；失败或取消即停机。
-// 「移到点选位置上方」也走这里，只是轨迹只有一个点。
+// 「移动至焊缝起点上方」也走这里，只是轨迹只有一个点。
 class WeldPathController : public QObject
 {
     Q_OBJECT

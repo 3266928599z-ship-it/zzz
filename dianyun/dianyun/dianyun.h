@@ -105,7 +105,7 @@ private slots:
     void onScanRequestAction();
 
     void onReloadCalibration();
-    void onMoveAbovePickedPoint();
+    void onMoveAboveSeamStart();
     void onWeldDryRun();
     void onWeldExecute();
     void onPathProgress(QString message);
@@ -126,7 +126,7 @@ private:
     QAction* m_actScanCancel = nullptr;
     WeldPathController* m_pathController = nullptr;
     QAction* m_actReloadCalibration = nullptr;
-    QAction* m_actMoveAbovePick = nullptr;
+    QAction* m_actMoveAboveSeamStart = nullptr;
     QAction* m_actWeldDryRun = nullptr;
     QAction* m_actWeldExecute = nullptr;
     QAction* m_actPathCancel = nullptr;

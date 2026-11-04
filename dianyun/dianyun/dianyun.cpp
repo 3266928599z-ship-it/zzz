@@ -446,54 +446,53 @@ void dianyun::setupMenuAndShortcuts()
         this, &dianyun::onCameraDeviceInfo);
     commMenu->addSeparator();
 
-    QMenu* robotMenu = commMenu->addMenu(QString::fromUtf8("机械臂"));
-    m_actRobotConnect = robotMenu->addAction(
+    m_actRobotConnect = commMenu->addAction(
         QString::fromUtf8("连接机械臂"),
         this, &dianyun::onRobotConnectAction);
-    m_actRobotDisconnect = robotMenu->addAction(
+    m_actRobotDisconnect = commMenu->addAction(
         QString::fromUtf8("断开机械臂"),
         this, &dianyun::onRobotDisconnectAction);
-    m_actRobotStatus = robotMenu->addAction(
+    m_actRobotStatus = commMenu->addAction(
         QString::fromUtf8("机器人状态"),
         this, &dianyun::onRobotStatusInfo);
-    m_actRobotResetFault = robotMenu->addAction(
+    m_actRobotResetFault = commMenu->addAction(
         QString::fromUtf8("清除报警"),
         this, &dianyun::onRobotResetFault);
-    robotMenu->addSeparator();
-    m_actScanStart = robotMenu->addAction(
+    commMenu->addSeparator();
+    m_actReloadCalibration = commMenu->addAction(
+        QString::fromUtf8("重新加载手眼标定"),
+        this, &dianyun::onReloadCalibration);
+    commMenu->addSeparator();
+    commMenu->addAction(QString::fromUtf8("通信自检"),
+        QKeySequence(QStringLiteral("Ctrl+Shift+D")),
+        this, &dianyun::onCommSelfCheck);
+
+    QMenu* execMenu = ui->menuBar->addMenu(QString::fromUtf8("执行"));
+    m_actScanStart = execMenu->addAction(
         QString::fromUtf8("开始扫描采集"),
         QKeySequence(QStringLiteral("Ctrl+Shift+S")),
         this, &dianyun::onScanRequestAction);
-    m_actScanCancel = robotMenu->addAction(
+    m_actScanCancel = execMenu->addAction(
         QString::fromUtf8("取消扫描"),
         this, [this]() {
             if (m_scanController) m_scanController->cancel();
         });
-    robotMenu->addSeparator();
-    m_actMoveAbovePick = robotMenu->addAction(
-        QString::fromUtf8("移到点选位置上方 30 mm（标定核对）"),
-        this, &dianyun::onMoveAbovePickedPoint);
-    m_actWeldDryRun = robotMenu->addAction(
+    execMenu->addSeparator();
+    m_actMoveAboveSeamStart = execMenu->addAction(
+        QString::fromUtf8("移动至焊缝起点上方（30 mm）"),
+        this, &dianyun::onMoveAboveSeamStart);
+    m_actWeldDryRun = execMenu->addAction(
         QString::fromUtf8("焊缝空走（抬高 20 mm）"),
         this, &dianyun::onWeldDryRun);
-    m_actWeldExecute = robotMenu->addAction(
+    m_actWeldExecute = execMenu->addAction(
         QString::fromUtf8("沿焊缝执行"),
         this, &dianyun::onWeldExecute);
-    m_actPathCancel = robotMenu->addAction(
+    m_actPathCancel = execMenu->addAction(
         QString::fromUtf8("停止轨迹运动"),
         QKeySequence(Qt::Key_Escape),
         this, [this]() {
             if (m_pathController) m_pathController->cancel();
         });
-    robotMenu->addSeparator();
-    m_actReloadCalibration = robotMenu->addAction(
-        QString::fromUtf8("重新加载手眼标定"),
-        this, &dianyun::onReloadCalibration);
-
-    commMenu->addSeparator();
-    commMenu->addAction(QString::fromUtf8("通信自检"),
-        QKeySequence(QStringLiteral("Ctrl+Shift+D")),
-        this, &dianyun::onCommSelfCheck);
 
     QMenu* helpMenu = ui->menuBar->addMenu(QString::fromUtf8("帮助"));
     helpMenu->addAction(QString::fromUtf8("操作说明"), this, [this]() {
@@ -1047,11 +1046,15 @@ void dianyun::updateActionStates()
     const bool motionPossible = m_robotState == DeviceLinkState::Online
         && m_handEyeValid && m_scanCloudFrame == CloudFrame::RobotBase
         && !scanning && !pathRunning && !matchRunning;
-    const bool seamReady = motionPossible && selectedSeam() != nullptr
+    const WeldSeamData* activeSeam = selectedSeam();
+    const bool seamReady = motionPossible && activeSeam != nullptr
         && m_lastMatchResult.success
         && m_lastMatchResult.verdict == MatchVerdict::Pass;
-    if (m_actMoveAbovePick) {
-        m_actMoveAbovePick->setEnabled(motionPossible && m_havePickedPoint);
+    // 起点接近点要求焊缝已设起焊点且已映射到基坐标
+    const bool seamStartReady = seamReady && activeSeam->hasStart
+        && m_mappedSeams.count(activeSeam->id) > 0;
+    if (m_actMoveAboveSeamStart) {
+        m_actMoveAboveSeamStart->setEnabled(seamStartReady);
     }
     if (m_actWeldDryRun) m_actWeldDryRun->setEnabled(seamReady);
     if (m_actWeldExecute) m_actWeldExecute->setEnabled(seamReady);
@@ -2210,35 +2213,64 @@ void dianyun::scanPointPicked(
     updateActionStates();
 }
 
-void dianyun::onMoveAbovePickedPoint()
+void dianyun::onMoveAboveSeamStart()
 {
-    if (!m_havePickedPoint || !robotMotionAllowed()) return;
+    if (!robotMotionAllowed()) return;
+    const WeldSeamData* seam = selectedSeam();
+    if (!seam) {
+        appendLog(QString::fromUtf8("请先在焊缝列表中选中一条焊缝。"), LogLevel::Warning);
+        return;
+    }
+    if (!seam->hasStart) {
+        appendLog(QString::fromUtf8(
+            "该焊缝尚未设定起焊点，焊接方向不确定。请先点「焊缝起点」。"),
+            LogLevel::Warning);
+        return;
+    }
+    const auto mapped = m_mappedSeams.find(seam->id);
+    if (mapped == m_mappedSeams.end()) {
+        appendLog(QString::fromUtf8("请先对该焊缝执行焊缝映射。"), LogLevel::Warning);
+        return;
+    }
+
+    std::vector<Eigen::Vector3f> path;
+    bool closed = false;
+    QString errorMessage;
+    if (!m_weldSeamService.orderedPath(mapped->second, path, closed, errorMessage)) {
+        appendLog(errorMessage, LogLevel::Warning);
+        return;
+    }
+
     double heading = 0.0;
     double tiltDeg = 0.0;
     if (!levelHeading(heading, tiltDeg)) return;
 
+    // 与「沿焊缝执行」的第一个接近点保持同一几何定义
     constexpr double kAboveMm = 30.0;
+    const Eigen::Vector3f start = path.front();
     WeldWaypoint waypoint;
     waypoint.kind = WeldWaypoint::Kind::Approach;
-    waypoint.pose = { m_pickedPoint.x(), m_pickedPoint.y(),
-        m_pickedPoint.z() + kAboveMm, 180.0, 0.0, heading };
+    waypoint.pose = { start.x(), start.y(), start.z() + kAboveMm,
+        180.0, 0.0, heading };
 
     const double distance = std::sqrt(
         std::pow(waypoint.pose[0] - m_lastTcpPose[0], 2)
         + std::pow(waypoint.pose[1] - m_lastTcpPose[1], 2)
         + std::pow(waypoint.pose[2] - m_lastTcpPose[2], 2));
     const auto answer = QMessageBox::question(this,
-        QString::fromUtf8("移到点选位置上方"),
+        QString::fromUtf8("移动至焊缝起点上方"),
         QString::fromUtf8(
+            "焊缝：%1\n"
+            "起点：X %2  Y %3  Z %4 mm\n"
             "TCP（工具 1）将以 10% 速度直线移到：\n"
-            "X %1  Y %2  Z %3 mm / Rx 180  Ry 0  Rz %4°\n"
-            "直线距离约 %5 mm。\n\n"
-            "TCP 在点选位置正上方 %6 mm，真实尖端再高 10 mm。\n"
-            "到位后用尺子量尖端到该点的偏差，即为标定链总误差；\n"
-            "若明显偏离或方向相反，请修改 calibration.json 的 sensorAxis。\n"
-            "请确认路径上无人无障碍，手放在急停上。")
-            .arg(waypoint.pose[0], 0, 'f', 2)
-            .arg(waypoint.pose[1], 0, 'f', 2)
+            "X %2  Y %3  Z %5 mm / Rx 180  Ry 0  Rz %6°\n"
+            "直线距离约 %7 mm。\n\n"
+            "TCP 位于焊缝起点正上方 %8 mm（沿基坐标 +Z），真实尖端再高 10 mm。\n"
+            "请确认路径上无人无障碍，手放在急停上。按 Esc 可停止。")
+            .arg(seam->name)
+            .arg(start.x(), 0, 'f', 2)
+            .arg(start.y(), 0, 'f', 2)
+            .arg(start.z(), 0, 'f', 2)
             .arg(waypoint.pose[2], 0, 'f', 2)
             .arg(heading, 0, 'f', 2)
             .arg(distance, 0, 'f', 1)
@@ -2249,7 +2281,7 @@ void dianyun::onMoveAbovePickedPoint()
     WeldPathController::Speeds speeds;
     speeds.travelPercent = 10.0f;
     m_pathController->start({ waypoint }, speeds,
-        QString::fromUtf8("移到点选位置上方"));
+        QString::fromUtf8("移动至焊缝起点上方"));
     updateActionStates();
 }
 
