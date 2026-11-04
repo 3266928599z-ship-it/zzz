@@ -171,6 +171,11 @@ private:
     // 最近一次订阅到的 TCP 位姿，用于「以当前位姿为扫描起点」
     double m_lastTcpPose[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
     bool m_haveTcpPose = false;
+    // 最近一次成功扫描的调平起点位姿，焊接完成后返回这里
+    double m_scanStartPose[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+    bool m_haveScanStartPose = false;
+    // 本次扫描的起点，扫描成功后才提交到 m_scanStartPose
+    double m_pendingScanStartPose[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
     int m_seamCounter = 0;
     int m_selectedFaceA = -1;
     int m_selectedFaceB = -1;

@@ -8,7 +8,7 @@
 
 // 焊缝轨迹的一个 TCP 目标（基坐标，mm / 度，法奥固定轴 XYZ）
 struct WeldWaypoint {
-    enum class Kind { Approach, Descend, Seam, Retreat };
+    enum class Kind { Approach, Descend, Seam, Retreat, Return };
     Kind kind = Kind::Seam;
     std::array<double, 6> pose{};
 };
@@ -24,19 +24,25 @@ struct WeldPathOptions {
     double minSpacingMm = 0.5;
     // 三点夹角偏离直线不足该值时删去中间点，减少 MoveL 段数
     double collinearToleranceDeg = 0.5;
+    // 焊接完成后返回的位姿（通常是调平后的拍摄起点）。全零或
+    // needReturn 为 false 时不追加返回段。
+    bool needReturn = false;
+    std::array<double, 6> returnPose{};
 };
 
 struct WeldPathPlan {
-    std::vector<WeldWaypoint> waypoints;   // 接近 → 下降(起点) → 焊缝 → 退出
+    std::vector<WeldWaypoint> waypoints;   // 接近 → 下降(起点) → 焊缝 → 退出 [→ 返回]
     double seamLengthMm = 0.0;
     double minSeamZ = 0.0;
     double maxSeamZ = 0.0;
     int seamSegments = 0;
+    // 焊缝终点在 waypoints 中的下标；追加返回段后末尾不再是焊缝终点
+    std::size_t seamEndIndex = 1;
 
     const std::array<double, 6>& seamStart() const { return waypoints[1].pose; }
     const std::array<double, 6>& seamEnd() const
     {
-        return waypoints[waypoints.size() - 2].pose;
+        return waypoints[seamEndIndex].pose;
     }
 };
 

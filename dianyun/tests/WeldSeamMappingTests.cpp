@@ -266,6 +266,48 @@ int checkWeldPathPlanner()
             options, plan, error)) {
         return fail("planner accepted a seam shorter than the spacing");
     }
+
+    // 追加返回段：在安全高度平移并转姿态，再下降到返回位姿。
+    // 安全高度取退出点与返回位姿的较大者，因此抬升与下降不会同时出现。
+    options.needReturn = true;
+    options.returnPose = { 100.0, 100.0, 40.0, 180.0, 0.0, 90.0 };
+    if (!planWeldPath(seam, options, plan, error)) {
+        return fail("planner rejected a valid return pose");
+    }
+    // 接近、下降、2 段焊缝、退出 + 2 段返回
+    if (plan.waypoints.size() != 7) {
+        return fail("planner did not append the return waypoints");
+    }
+    for (std::size_t i = 5; i < plan.waypoints.size(); ++i) {
+        if (plan.waypoints[i].kind != Kind::Return) {
+            return fail("planner return waypoints have the wrong kind");
+        }
+    }
+    // 退出点 Z = 12 + 20 + 30 = 62，高于返回位姿的 40，安全高度取 62：
+    // 先在 62 平移并转到 Rz 90，再下降到 40
+    if (std::abs(plan.waypoints[5].pose[0] - 100.0) > 1e-6 ||
+        std::abs(plan.waypoints[5].pose[2] - 62.0) > 1e-6 ||
+        std::abs(plan.waypoints[5].pose[5] - 90.0) > 1e-6 ||
+        std::abs(plan.waypoints[6].pose[2] - 40.0) > 1e-6) {
+        return fail("planner return segment geometry is wrong");
+    }
+    if (std::abs(plan.seamEnd()[1] - 10.0) > 1e-6 ||
+        std::abs(plan.seamStart()[2] - 30.0) > 1e-6) {
+        return fail("seam end index was not preserved after the return segment");
+    }
+
+    // 返回位姿高于退出点：先竖直抬到返回高度，再平移，无需下降
+    options.returnPose = { 100.0, 100.0, 150.0, 180.0, 0.0, 90.0 };
+    if (!planWeldPath(seam, options, plan, error)) {
+        return fail("planner rejected a higher return pose");
+    }
+    if (plan.waypoints.size() != 7 ||
+        std::abs(plan.waypoints[5].pose[0] - 10.0) > 1e-6 ||
+        std::abs(plan.waypoints[5].pose[2] - 150.0) > 1e-6 ||
+        std::abs(plan.waypoints[6].pose[0] - 100.0) > 1e-6 ||
+        std::abs(plan.waypoints[6].pose[2] - 150.0) > 1e-6) {
+        return fail("planner return lift segment is wrong");
+    }
     return 0;
 }
 

@@ -14,6 +14,7 @@ QString kindName(WeldWaypoint::Kind kind)
     case WeldWaypoint::Kind::Descend:  return QString::fromUtf8("下降到起点");
     case WeldWaypoint::Kind::Seam:     return QString::fromUtf8("沿焊缝");
     case WeldWaypoint::Kind::Retreat:  return QString::fromUtf8("退出");
+    case WeldWaypoint::Kind::Return:   return QString::fromUtf8("返回拍摄起点");
     }
     return QString();
 }

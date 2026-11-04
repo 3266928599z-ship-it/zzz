@@ -56,6 +56,14 @@ bool planWeldPath(const std::vector<Eigen::Vector3f>& seamInBase,
         errorMessage = QString::fromUtf8("轨迹参数无效（接近高度须大于 0，抬高量不能为负）。");
         return false;
     }
+    if (options.needReturn) {
+        for (double value : options.returnPose) {
+            if (!std::isfinite(value)) {
+                errorMessage = QString::fromUtf8("返回位姿包含无效数值。");
+                return false;
+            }
+        }
+    }
 
     const std::vector<Eigen::Vector3d> path = simplify(
         seamInBase, std::max(options.minSpacingMm, 1e-6),
@@ -84,6 +92,29 @@ bool planWeldPath(const std::vector<Eigen::Vector3f>& seamInBase,
     }
     plan.waypoints.push_back({ WeldWaypoint::Kind::Retreat,
         makePose(path.back(), options.approachMm) });
+    plan.seamEndIndex = plan.waypoints.size() - 2;
     plan.seamSegments = static_cast<int>(path.size()) - 1;
+
+    // 返回拍摄起点：先竖直抬到两者中较高处，再水平平移并转到拍摄姿态，
+    // 最后竖直降到位。直接斜穿可能在未抬够高度时撞到工件。
+    if (options.needReturn) {
+        constexpr double kHeightToleranceMm = 0.5;
+        const auto& retreat = plan.waypoints.back().pose;
+        const double safeZ = std::max(retreat[2], options.returnPose[2]);
+
+        if (safeZ - retreat[2] > kHeightToleranceMm) {
+            plan.waypoints.push_back({ WeldWaypoint::Kind::Return,
+                { retreat[0], retreat[1], safeZ,
+                  retreat[3], retreat[4], retreat[5] } });
+        }
+        plan.waypoints.push_back({ WeldWaypoint::Kind::Return,
+            { options.returnPose[0], options.returnPose[1], safeZ,
+              options.returnPose[3], options.returnPose[4],
+              options.returnPose[5] } });
+        if (safeZ - options.returnPose[2] > kHeightToleranceMm) {
+            plan.waypoints.push_back({ WeldWaypoint::Kind::Return,
+                options.returnPose });
+        }
+    }
     return true;
 }

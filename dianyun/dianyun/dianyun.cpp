@@ -2070,6 +2070,8 @@ void dianyun::onScanRequestAction()
     std::copy_n(liftPose, 6, request.liftPose);
     request.useStartPose = true;    // 先走到扫描位姿，再起流扫描
     request.useLiftPose = needLift; // 已在安全高度以上则跳过竖直抬升
+    // 记下这次扫描的调平起点；扫描成功后才提交为返回目标
+    std::copy_n(levelPose, 6, m_pendingScanStartPose);
     request.scanAxis = ScanRequest::ScanAxis::ToolX;
     request.scanLengthMm = 200.0;
     request.stepUm = 96.0f;
@@ -2113,6 +2115,9 @@ void dianyun::onScanFinished(CloudRGB::Ptr cloud, CloudFrame frame)
     m_scanCloud = cloud;
     m_scanCloudFrame = frame;
     m_havePickedPoint = false;
+    // 扫描成功才提交起点，失败时保留上一次的有效记录
+    std::copy_n(m_pendingScanStartPose, 6, m_scanStartPose);
+    m_haveScanStartPose = true;
     invalidateMatchResult();
     m_visualization.showScanCloud(m_scanCloud);
     m_reportProgressiveRender = true;
@@ -2339,6 +2344,11 @@ void dianyun::runSelectedSeam(bool dryRun)
     options.headingDeg = heading;
     options.approachMm = 30.0;
     options.liftMm = dryRun ? kDryRunLiftMm : 0.0;
+    // 空走与实焊都返回扫描起点（调平后的拍摄位姿）
+    options.needReturn = m_haveScanStartPose;
+    if (options.needReturn) {
+        std::copy_n(m_scanStartPose, 6, options.returnPose.begin());
+    }
     WeldPathPlan plan;
     if (!planWeldPath(path, options, plan, errorMessage)) {
         appendLog(errorMessage, LogLevel::Warning);
@@ -2360,6 +2370,16 @@ void dianyun::runSelectedSeam(bool dryRun)
     const auto& end = plan.seamEnd();
     const QString title = dryRun
         ? QString::fromUtf8("焊缝空走") : QString::fromUtf8("沿焊缝执行");
+    const QString returnText = options.needReturn
+        ? QString::fromUtf8(
+            "完成后返回拍摄起点：X %1  Y %2  Z %3 mm / Rx %4  Ry %5  Rz %6°\n")
+            .arg(options.returnPose[0], 0, 'f', 2)
+            .arg(options.returnPose[1], 0, 'f', 2)
+            .arg(options.returnPose[2], 0, 'f', 2)
+            .arg(options.returnPose[3], 0, 'f', 2)
+            .arg(options.returnPose[4], 0, 'f', 2)
+            .arg(options.returnPose[5], 0, 'f', 2)
+        : QString::fromUtf8("没有可用的拍摄起点记录，本次不返回。\n");
     const auto answer = QMessageBox::question(this, title,
         QString::fromUtf8(
             "焊缝：%1（%2，%3 段，长 %4 mm）\n"
@@ -2367,7 +2387,7 @@ void dianyun::runSelectedSeam(bool dryRun)
             "终点 TCP：X %8  Y %9  Z %10 mm\n"
             "焊缝高度范围 Z %11 ~ %12 mm；姿态 Rx 180 / Ry 0 / Rz %13°（全程调平）\n"
             "接近/退出高度 %14 mm（%15% 速度），焊缝段 %16% 速度。\n"
-            "%17\n\n"
+            "%17\n%18\n"
             "请确认路径上无人无障碍，手放在急停上。按 Esc 可停止。")
             .arg(seam->name)
             .arg(closed ? QString::fromUtf8("闭合") : QString::fromUtf8("开放"))
@@ -2383,9 +2403,16 @@ void dianyun::runSelectedSeam(bool dryRun)
             .arg(dryRun
                 ? QString::fromUtf8("空走：整条轨迹抬高 %1 mm，真实尖端距焊缝约 %2 mm。")
                     .arg(kDryRunLiftMm, 0, 'f', 0).arg(kDryRunLiftMm + 10.0, 0, 'f', 0)
-                : QString::fromUtf8("贴合：TCP 落在焊缝上，真实尖端距焊缝 10 mm。")),
+                : QString::fromUtf8("贴合：TCP 落在焊缝上，真实尖端距焊缝 10 mm。"))
+            .arg(returnText),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (answer != QMessageBox::Yes) return;
+
+    if (!options.needReturn) {
+        appendLog(QString::fromUtf8(
+            "没有拍摄起点记录（需先完成一次扫描），本次执行后停在退出点。"),
+            LogLevel::Warning);
+    }
 
     appendLog(QString::fromUtf8("%1开始：%2 个目标点。")
         .arg(title).arg(plan.waypoints.size()), LogLevel::Info);
